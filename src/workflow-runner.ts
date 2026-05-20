@@ -15,18 +15,56 @@ import type {
   RunContext,
   RunRequest,
   VaultMode,
-} from "@feynman/protocol";
+} from "./protocol";
 
-import type { FeynmanClient } from "./transport/client";
+import type { EventStream, FeynmanClient } from "./transport/client";
 import {
   FeynmanChatView,
   VIEW_TYPE_FEYNMAN_CHAT,
 } from "./views/chat-view";
 
+/**
+ * Subset of the plugin surface the runner uses for the active-run registry.
+ * Decoupled so this file doesn't import `main.ts` (circular) and the runner
+ * can be smoke-tested without a real Plugin instance.
+ */
+export interface ActiveRunRegistry {
+  registerActiveRun: (
+    runId: string,
+    stream: EventStream,
+    cleanup: () => void,
+  ) => void;
+  unregisterActiveRun: (runId: string) => void;
+}
+
 export interface RunWorkflowDeps {
   client: FeynmanClient;
   getVaultMode: () => VaultMode;
   getModel: () => string | undefined;
+  /**
+   * Optional hook invoked whenever a non-empty SSE framing `id:` is observed
+   * on an event from the run. Wired by Agent 6 in Wave 3 to persist
+   * `(runId, lastEventId)` to plugin data so a vault reload can resume the
+   * stream with `Last-Event-ID`. The plumbing lives here; persistence is
+   * deferred to the caller.
+   */
+  onLastEventIdAdvance?: (runId: string, eventId: string) => void;
+  /**
+   * Optional active-run registry. When present, the runner registers the
+   * stream on run start and unregisters on terminal events. Wave 3 Agent 6
+   * wires this from the plugin so `onunload` can cancel + close everything.
+   */
+  registry?: ActiveRunRegistry;
+}
+
+/**
+ * State an in-flight run carries between sessions. Persisted by Agent 6 in
+ * Wave 3; consumed by `resumeWorkflow` below. `lastEventId` is the SSE
+ * framing id of the last delivered event (string per SSE spec).
+ */
+export interface PersistedRunState {
+  runId: string;
+  lastEventId?: string;
 }
 
 /**
@@ -57,12 +95,71 @@ export async function runWorkflow(
       view.setInputPoster((input: Input) =>
         deps.client.postInput(res.runId, input),
       );
-      const stream = deps.client.openEvents(res.runId, {});
+      if (deps.registry !== undefined) {
+        view.setPluginRef(deps.registry);
+      }
+      view.setRunContext(res.runId, new Set());
+      const onLastEventIdAdvance = deps.onLastEventIdAdvance;
+      const stream = deps.client.openEvents(res.runId, {
+        onFramingId:
+          onLastEventIdAdvance !== undefined
+            ? (eventId) => onLastEventIdAdvance(res.runId, eventId)
+            : undefined,
+      });
+      if (deps.registry !== undefined) {
+        deps.registry.registerActiveRun(res.runId, stream, () => stream.close());
+      }
       void view.attachStream(stream);
     }
   } catch (err) {
     new Notice(
       `Feynman: run failed — ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Reattach to a previously-started run after a vault reload. Verifies the
+ * run still exists on the server (so a stale persisted runId surfaces as a
+ * clean error rather than a hung reconnect loop) before opening the SSE
+ * stream with `Last-Event-ID`. Wave 1 ships the plumbing; Agent 6 (Wave 3)
+ * wires this into the lifecycle layer.
+ */
+export async function resumeWorkflow(
+  app: App,
+  state: PersistedRunState,
+  deps: RunWorkflowDeps,
+): Promise<void> {
+  try {
+    // Verify the run exists before subscribing. If the server has GC'd it,
+    // getRun throws a clear HTTP 404 instead of us looping on the SSE GET
+    // until the auth-failed / unknown-run mapping fires.
+    await deps.client.getRun(state.runId);
+    const view = await openChatLeaf(app);
+    if (view !== null) {
+      view.setInputPoster((input: Input) =>
+        deps.client.postInput(state.runId, input),
+      );
+      if (deps.registry !== undefined) {
+        view.setPluginRef(deps.registry);
+      }
+      view.setRunContext(state.runId, new Set());
+      const onLastEventIdAdvance = deps.onLastEventIdAdvance;
+      const stream = deps.client.openEvents(state.runId, {
+        lastEventId: state.lastEventId,
+        onFramingId:
+          onLastEventIdAdvance !== undefined
+            ? (eventId) => onLastEventIdAdvance(state.runId, eventId)
+            : undefined,
+      });
+      if (deps.registry !== undefined) {
+        deps.registry.registerActiveRun(state.runId, stream, () => stream.close());
+      }
+      void view.attachStream(stream);
+    }
+  } catch (err) {
+    new Notice(
+      `Feynman: resume failed — ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 }

@@ -175,3 +175,58 @@ When something fails, capture:
 4. A minimal repro `curl` invocation if applicable.
 
 File against `feynman-obsidian` if the failure is plugin-side; against `feynman` if server- or workspace-side. The boundary is the wire — anything inside the SSE stream or the JSON response shape is a server bug; anything in the chat view, settings UI, or command palette is plugin.
+
+## Manual verification checklist (Agent 7)
+
+Run these by hand before tagging a v1 release. Each item maps back to one of the five release-review reports in `.pm/release-review/`. The automated `npm test` + `npm run build` + `npx tsc --noEmit` gates the build pipeline; this checklist gates the release decision.
+
+### Distribution / build
+
+- [ ] `git clone <repo>` into a tmp directory (no sibling `feynman/` repo present), `cd` in, `npm install`, `npm run build` → exits 0.
+- [ ] `npm test` → exits 0; all tests pass.
+- [ ] `npx tsc --noEmit` → exits 0.
+- [ ] `cat package.json | jq '.dependencies'` shows no `file:` entries.
+- [ ] `cat package.json | jq '.devDependencies'` shows no `"latest"` versions.
+- [ ] `manifest.json` version, `package.json` version, and `versions.json` are aligned at `1.0.0`.
+- [ ] `LICENSE` exists; `README.md` is more than one sentence and includes Install / Privacy / Anthropic-key-disclosure sections.
+
+### Docker bring-up
+
+- [ ] Fresh vault, fresh Obsidian install. Enable plugin. Settings opens to onboarding. Click "Set up Docker" → plugin actually `pull`s + `start`s; Notices show progress; container shows running in the settings UI.
+- [ ] Stop Docker Desktop. Reload plugin. Settings UI shows "Docker daemon not running" (not a stack trace).
+- [ ] `docker run -d --name feynman-server -p 7777:7777 …` already running from a prior session. Click "Set up Docker" → supervisor reuses or `--rm`s the stale container, doesn't error on "name in use".
+- [ ] Port 7777 occupied by another process. Supervisor auto-bumps to a free port or surfaces a clear error.
+- [ ] No Anthropic key visible in `ps aux | grep ANTHROPIC` or `~/.zsh_history` after setup.
+
+### Security
+
+- [ ] `curl -i http://127.0.0.1:7777/v1/health` from another shell **without** the bearer → returns 401.
+- [ ] `curl -i -H "Authorization: Bearer <plugin-token>" http://127.0.0.1:7777/v1/health` → returns 200.
+- [ ] Trigger a `tool.approval_required` from a test workflow. Modal shows the actual tool name + args; Deny is default-focused; Escape dismisses as Deny.
+- [ ] Self-hosted backend: try to save `http://example.com` → rejected inline. `https://example.com` accepted.
+- [ ] Modal-tier dropdown option is disabled and shows "(coming soon)".
+- [ ] Switch to Self-hosted mode, paste a token, refresh — `data.json` on disk shows the token in plaintext. Settings UI shows the disclosure copy. README has the disclosure.
+- [ ] Send an `artifact.written` event from a stub server with `ev.path = "../../../etc/passwd"` → rejected, no link rendered. Same for `javascript:` schemes.
+
+### Transport
+
+- [ ] Run a workflow. Stop Docker mid-stream. Chat view shows a `stream-error` callout within ~30 s (read-watchdog fires, then synthetic error after reconnect threshold). Spinner does not hang forever.
+- [ ] Run a workflow. Disable the plugin mid-stream. Server logs show `POST /v1/runs/<id>/cancel` landed. Tokens stop burning.
+- [ ] Server returns 401 on the SSE GET. Chat view shows `auth-failed` error callout, not an infinite reconnect loop.
+- [ ] Forge a clock-skew: kill the server, wait, restart with the same `runId`. Reopening the chat resumes from `Last-Event-ID`; no event replay.
+
+### fs-bridge
+
+- [ ] Server emits an `fs.read_request` for a vault file. Handler responds via `inputPoster`; run completes.
+- [ ] Server emits an `fs.read_request` for `../../etc/passwd`. Handler responds with `{ ok: false, code: "fs/rejected" }`. Run continues.
+- [ ] Server emits an `fs.write_request` for a file not in the manifest's declared paths. Approval modal fires; on Deny, server gets `{ ok: false, code: "fs/denied" }`.
+- [ ] Server emits an `fs.write_request` with 100 MB content. Handler rejects with `{ ok: false, code: "fs/too-large" }`.
+
+### Obsidian-frontend
+
+- [ ] Plugin survives `Cmd-R` (reload) without leaked listeners (Obsidian dev-tools shows no zombie timers).
+- [ ] Switch backend in the dropdown → workflows pane updates label automatically, no manual "Test connection" needed.
+- [ ] Type an Anthropic key 60 chars long → `data.json` modtime advances at most twice (debounce holds).
+- [ ] Open command palette → commands show without the `Feynman: ` prefix, without trailing ellipsis.
+- [ ] No empty `FeynmanArtifactView` pane is exposed anywhere in the UI.
+- [ ] Waitlist button: until the real `waitlist_id` is set, the button is gated behind `features.waitlist.enabled = false` and not visible in the default config.

@@ -1,0 +1,322 @@
+/**
+ * Feynman wire-protocol types for the `/v1/*` HTTP+SSE surface defined in
+ * ARCHITECTURE.md §5. Types only; this module emits a small amount of runtime
+ * code (the `PATHS` table and the two version constants below).
+ *
+ * The plugin (`feynman-obsidian`) and the server (`@feynman/server`) both
+ * depend on these shapes so the wire stays in lockstep. Originally this lived
+ * in a sibling workspace package (`../feynman/packages/protocol`); for v1
+ * distribution it is vendored into the plugin so a clean clone can
+ * `npm install` without the sibling repo present.
+ */
+
+// ---------------------------------------------------------------------------
+// Version constants (vendored-only — not present in the upstream package)
+// ---------------------------------------------------------------------------
+
+/**
+ * Minimum `@feynman/server` semver this plugin build understands. The Docker
+ * supervisor and `refreshConnection` consumers compare `HealthResponse.version`
+ * against this; lower-version servers surface a "pull a newer image" error.
+ */
+export const MIN_SERVER_VERSION = "1.0.0";
+
+/**
+ * Wire-protocol revision negotiated between plugin and server. Sent in the
+ * `X-Feynman-Protocol` header on every request; the server rejects mismatches
+ * with a 400 before any business logic runs.
+ */
+export const PROTOCOL_VERSION = "1";
+
+// ---------------------------------------------------------------------------
+// 5.1 Endpoint paths
+// ---------------------------------------------------------------------------
+
+/**
+ * Canonical URL templates for every endpoint in ARCHITECTURE.md §5.1.
+ * Functions take path params and return the path; static endpoints are plain
+ * strings. No base URL — callers prepend it.
+ */
+export const PATHS = {
+  health: "/v1/health",
+  manifest: "/v1/manifest",
+  run: "/v1/run",
+  runState: (runId: string): string => `/v1/runs/${runId}`,
+  runEvents: (runId: string): string => `/v1/runs/${runId}/events`,
+  runInput: (runId: string): string => `/v1/runs/${runId}/input`,
+  runCancel: (runId: string): string => `/v1/runs/${runId}/cancel`,
+  runArtifact: (runId: string, path: string): string =>
+    `/v1/runs/${runId}/artifacts/${path}`,
+  licenseActivate: "/v1/license/activate",
+} as const;
+
+// ---------------------------------------------------------------------------
+// Vault / run context (§8.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Editor state the plugin captures and forwards on `POST /v1/run` when the
+ * invoked prompt's manifest entry declares matching `context` tokens.
+ * Verbatim from ARCHITECTURE.md §8.1.
+ */
+export type RunContext = {
+  activeFile?: {
+    path: string;
+    content: string;
+    frontmatter?: Record<string, unknown>;
+  };
+  selection?: {
+    path: string;
+    text: string;
+    range: { from: number; to: number };
+  };
+  openTabs?: { path: string }[];
+};
+
+/** Tokens a prompt may opt into for editor-state capture (§8.1). */
+export type ContextToken = "activeFile" | "selection" | "openTabs";
+
+/** Deployment mode for a single run (§3, §6). */
+export type VaultMode = "docker" | "sandbox" | "fs-bridge";
+
+// ---------------------------------------------------------------------------
+// Manifest (§5.1 GET /v1/manifest, §8.1)
+// ---------------------------------------------------------------------------
+
+/** Type tag for a manifest-declared prompt argument. Conservative set — string covers anything textual; structured types added when prompts need them. */
+export type ManifestArgType = "string" | "number" | "boolean" | "enum";
+
+/**
+ * One argument declaration on a manifest prompt entry. Drives the generic
+ * input modal described in §8.1: each field renders a matching form control.
+ */
+export type ManifestArg = {
+  name: string;
+  type: ManifestArgType;
+  required: boolean;
+  help?: string;
+  // Only meaningful when `type === "enum"`; ARCHITECTURE.md does not specify
+  // the shape, so we use a string-literal list — conservative and renderable
+  // as a <select>.
+  enum?: string[];
+};
+
+/**
+ * A prompt exposed in `/v1/manifest`. `slug` is the URL-safe identifier the
+ * plugin passes back in `POST /v1/run.prompt`; `context` lists the §8.1
+ * tokens the server will accept on this prompt's run body.
+ */
+export type ManifestEntry = {
+  slug: string;
+  title: string;
+  description: string;
+  args: ManifestArg[];
+  context: ContextToken[];
+};
+
+/**
+ * A skill bundled with the server. Shape is intentionally minimal — v1 only
+ * needs to surface availability in settings / diagnostics. §5.1 lists
+ * `skills` in the manifest payload but does not pin its fields.
+ */
+export type SkillEntry = {
+  slug: string;
+  title: string;
+  description?: string;
+};
+
+/**
+ * A model the server can drive, surfaced in the settings model-picker (§8.4
+ * §5). `id` is what gets passed back in `RunRequest.model`.
+ */
+export type ModelEntry = {
+  id: string;
+  label: string;
+  provider?: string;
+  default?: boolean;
+};
+
+/**
+ * Optional usage meter surfaced for Managed Modal users per §6.3
+ * ("caps are returned in `/v1/manifest.capabilities.usage`"). Values are
+ * raw token counts; the plugin renders the percentage.
+ */
+export type UsageMeter = {
+  tokensUsed: number;
+  tokensLimit: number;
+  // §6.3 mentions "monthly budget" — period end is the renewal boundary.
+  periodEnd?: number;
+};
+
+/**
+ * Server capability flags advertised on `/v1/manifest`. Ambiguous in §5.1
+ * (listed as `capabilities: [...]` but referenced as `.capabilities.usage`
+ * in §6.3) — resolved as an object since §6.3's dotted access requires it.
+ */
+export type Capabilities = {
+  vaultModes: VaultMode[];
+  fsBridge: boolean;
+  artifactPull: boolean;
+  usage?: UsageMeter;
+};
+
+export type ManifestResponse = {
+  prompts: ManifestEntry[];
+  skills: SkillEntry[];
+  models: ModelEntry[];
+  capabilities: Capabilities;
+};
+
+// ---------------------------------------------------------------------------
+// Health (§5.1)
+// ---------------------------------------------------------------------------
+
+export type HealthResponse = {
+  ok: boolean;
+  version: string;
+};
+
+// ---------------------------------------------------------------------------
+// Run request / response (§5.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Body of `POST /v1/run`. `prompt` is the manifest slug; `args` is the
+ * generic modal's form values keyed by `ManifestArg.name`.
+ */
+export type RunRequest = {
+  prompt: string;
+  args: Record<string, unknown>;
+  vaultMode: VaultMode;
+  model?: string;
+  context?: RunContext;
+};
+
+/** Response from `POST /v1/run`. `eventsUrl` is a relative URL clients pass to EventSource. */
+export type RunResponse = {
+  runId: string;
+  eventsUrl: string;
+};
+
+/** Terminal state values per §5.4 (running, terminal, or cancelled). */
+export type RunStatus = "running" | "done" | "error" | "cancelled";
+
+/** Response from `GET /v1/runs/:id`. `lastEventId` is the highest `Event.id` the server has buffered for this run. */
+export type RunStateResponse = {
+  runId: string;
+  status: RunStatus;
+  startedAt: number;
+  lastEventId: number;
+};
+
+// ---------------------------------------------------------------------------
+// SSE events (§5.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Discriminated union of every event the server emits over
+ * `GET /v1/runs/:id/events`. Field names match §5.2 verbatim — notably
+ * `agent.message.markdown` and `agent.thinking.markdown` (NOT `content`),
+ * and `tool.call.args` is `unknown` because the payload is tool-specific.
+ */
+export type EventPayload =
+  | { type: "agent.message"; role: "assistant" | "system"; markdown: string }
+  | { type: "agent.thinking"; markdown: string }
+  | { type: "agent.question"; questionId: string; markdown: string }
+  | { type: "tool.call"; toolId: string; name: string; args: unknown }
+  | { type: "tool.result"; toolId: string; ok: boolean; preview?: string }
+  | {
+      type: "tool.approval_required";
+      toolId: string;
+      // The confirmation prompt shown to the user. NOT a tool identifier — Pi
+      // can emit extension-scoped confirms with no underlying tool name. The
+      // plugin renders this as the modal title; `args` carries whatever
+      // payload is available (Pi extension_ui_request body).
+      title: string;
+      args: unknown;
+    }
+  | { type: "fs.read_request"; reqId: string; path: string }
+  | {
+      type: "fs.write_request";
+      reqId: string;
+      path: string;
+      content: string;
+    }
+  | { type: "artifact.written"; path: string; bytes: number }
+  | { type: "run.error"; message: string; code?: string }
+  | { type: "run.done"; exitCode: number; summary?: string };
+
+/**
+ * An SSE event as observed by the client: the payload plus a monotonic `id`
+ * (echoed on the SSE `id:` line so reconnects work via `Last-Event-ID`) and
+ * a server-wall-clock `ts` in ms since epoch.
+ *
+ * Keepalive contract (§5.4): the server emits an SSE comment line
+ * `:keepalive\n\n` every 10 s between real events to defeat idle-timeout
+ * proxies. Comments are not delivered to EventSource `onmessage`, so this
+ * type does NOT include keepalives — clients can ignore them entirely.
+ * On reconnect, the server replays buffered events with `id > Last-Event-ID`;
+ * if the buffer has been evicted the server returns `409 Gone` (§5.4).
+ */
+export type Event = EventPayload & { id: number; ts: number };
+
+// ---------------------------------------------------------------------------
+// Client → server inputs (§5.2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Body of `POST /v1/runs/:id/input`. Discriminated union of the four reply
+ * shapes the plugin sends back: tool-call approvals, agent-question answers,
+ * and the two fs-bridge responses (§5.2, §5.4).
+ *
+ * Idempotency: §5.4 specifies the server dedupes on `(toolId | reqId |
+ * questionId)` so retries are safe.
+ */
+export type Input =
+  | {
+      type: "approval";
+      toolId: string;
+      decision: "allow" | "allow_once" | "deny";
+    }
+  | { type: "answer"; questionId: string; markdown: string }
+  | { type: "fs.read_response"; reqId: string; content: string | null }
+  | { type: "fs.write_response"; reqId: string; ok: boolean };
+
+// ---------------------------------------------------------------------------
+// License / subscription (§5.1, §6.3)
+// ---------------------------------------------------------------------------
+
+/**
+ * Subscription state cached in the Modal KV per §6.3. `grace` covers the
+ * post-`subscription_payment_failed` window before the entry is downgraded
+ * to `expired`.
+ */
+export type SubscriptionState = "active" | "grace" | "expired" | "cancelled";
+
+/**
+ * Body of `POST /v1/license/activate`. Binds a Lemon Squeezy license key to
+ * the plugin-instance hash (§6.3 step 3) so a single key cannot run on an
+ * unbounded number of devices.
+ */
+export type LicenseActivateRequest = {
+  licenseKey: string;
+  instanceHash: string;
+  // ARCHITECTURE.md does not specify an instance label; including it as
+  // optional metadata lets the activation list show something human-readable
+  // in the Lemon Squeezy dashboard. Server may ignore.
+  instanceName?: string;
+};
+
+/**
+ * Response from `POST /v1/license/activate`. `state` and `renewalDate`
+ * populate the §8.4 settings pill; `usage` mirrors `Capabilities.usage` for
+ * the meter shown after activation.
+ */
+export type LicenseActivateResponse = {
+  ok: boolean;
+  state: SubscriptionState;
+  renewalDate?: number;
+  usage?: UsageMeter;
+  // §6.3 references `instance_id` returned by Lemon Squeezy's activateLicense.
+  instanceId?: string;
+};

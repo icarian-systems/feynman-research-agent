@@ -12,10 +12,10 @@ import type {
   ManifestEntry,
   ManifestResponse,
   VaultMode,
-} from "@feynman/protocol";
+} from "../protocol";
 
 import type { FeynmanClient } from "../transport/client";
-import { runWorkflow } from "../workflow-runner";
+import { runWorkflow, type ActiveRunRegistry } from "../workflow-runner";
 
 export const VIEW_TYPE_FEYNMAN_WORKFLOWS = "feynman-workflows";
 
@@ -50,8 +50,18 @@ export interface WorkflowsViewDeps {
   /** Server health, refreshed by the host plugin. */
   serverOk: boolean;
   serverLabel: string;
+  /**
+   * Set when the most recent connection succeeded but the server's reported
+   * version is below `MIN_SERVER_VERSION`. The pane renders a distinct error
+   * banner separate from the generic "not connected" banner.
+   */
+  versionError?: string;
   /** Opens the plugin's settings tab. */
   openSettings: () => void;
+  /** Active-run registry — passed through to runWorkflow. */
+  registry?: ActiveRunRegistry;
+  /** Last-Event-ID persistence sink — passed through to runWorkflow. */
+  onLastEventIdAdvance?: (runId: string, eventId: string) => void;
 }
 
 type ArgValue = string | number | boolean;
@@ -124,7 +134,7 @@ export class FeynmanWorkflowsView extends ItemView {
       },
     });
     setIcon(settingsBtn, "settings");
-    settingsBtn.addEventListener("click", () => deps.openSettings());
+    this.registerDomEvent(settingsBtn, "click", () => deps.openSettings());
 
     const status = head.createDiv({ cls: "feynman-pane-status" });
     const dot = status.createSpan({
@@ -138,6 +148,30 @@ export class FeynmanWorkflowsView extends ItemView {
 
   private renderBody(root: HTMLElement, deps: WorkflowsViewDeps): void {
     const body = root.createDiv({ cls: "feynman-pane-body" });
+
+    // Version-skew banner — shown when the server is reachable but its
+    // reported version is below the plugin's MIN_SERVER_VERSION. Separate
+    // from the not-connected banner so the user knows the fix is "pull a
+    // newer image", not "configure a backend".
+    if (deps.versionError !== undefined && deps.versionError.length > 0) {
+      const banner = body.createDiv({
+        cls: "feynman-pane-banner feynman-pane-banner-version",
+      });
+      banner.createDiv({
+        cls: "feynman-pane-banner-title",
+        text: "Server version too old",
+      });
+      banner.createDiv({
+        cls: "feynman-pane-banner-body",
+        text: deps.versionError,
+      });
+      const configure = banner.createEl("button", {
+        text: "Open settings",
+        cls: "feynman-pane-banner-action mod-cta",
+        attr: { type: "button" },
+      });
+      this.registerDomEvent(configure, "click", () => deps.openSettings());
+    }
 
     // Not-connected banner — show whenever manifest is missing. Buttons
     // still render below, but disabled, so the layout doesn't shift after
@@ -157,7 +191,7 @@ export class FeynmanWorkflowsView extends ItemView {
         cls: "feynman-pane-banner-action mod-cta",
         attr: { type: "button" },
       });
-      configure.addEventListener("click", () => deps.openSettings());
+      this.registerDomEvent(configure, "click", () => deps.openSettings());
     }
 
     if (deps.manifest === null) {
@@ -229,7 +263,7 @@ export class FeynmanWorkflowsView extends ItemView {
     btn.createSpan({ cls: "feynman-wf-title", text: entry.title });
     btn.createSpan({ cls: "feynman-wf-arrow", text: "›" });
 
-    btn.addEventListener("click", () => {
+    this.registerDomEvent(btn, "click", () => {
       this.expanded = isOpen ? null : entry.slug;
       this.render();
     });
@@ -283,7 +317,7 @@ export class FeynmanWorkflowsView extends ItemView {
       text: "Cancel",
       attr: { type: "button" },
     });
-    cancelBtn.addEventListener("click", () => {
+    this.registerDomEvent(cancelBtn, "click", () => {
       this.expanded = null;
       this.render();
     });
@@ -293,7 +327,7 @@ export class FeynmanWorkflowsView extends ItemView {
       text: `Run /${entry.slug}`,
       attr: { type: "button" },
     });
-    runBtn.addEventListener("click", () => {
+    this.registerDomEvent(runBtn, "click", () => {
       void this.runEntry(entry, slugValues, runBtn, deps);
     });
   }
@@ -322,7 +356,9 @@ export class FeynmanWorkflowsView extends ItemView {
         });
         if (typeof current === "string") input.value = current;
         if (arg.required) input.setAttr("required", "true");
-        input.addEventListener("input", () => values.set(arg.name, input.value));
+        this.registerDomEvent(input, "input", () =>
+          values.set(arg.name, input.value),
+        );
         break;
       }
       case "number": {
@@ -331,7 +367,7 @@ export class FeynmanWorkflowsView extends ItemView {
         });
         if (typeof current === "number") input.value = String(current);
         if (arg.required) input.setAttr("required", "true");
-        input.addEventListener("input", () => {
+        this.registerDomEvent(input, "input", () => {
           const raw = input.value;
           const n = raw === "" ? "" : Number(raw);
           values.set(arg.name, typeof n === "number" && !Number.isNaN(n) ? n : "");
@@ -344,7 +380,7 @@ export class FeynmanWorkflowsView extends ItemView {
           attr: { id: inputId, type: "checkbox" },
         });
         if (current === true) checkbox.checked = true;
-        checkbox.addEventListener("change", () =>
+        this.registerDomEvent(checkbox, "change", () =>
           values.set(arg.name, checkbox.checked),
         );
         break;
@@ -365,7 +401,7 @@ export class FeynmanWorkflowsView extends ItemView {
           select.value = first;
           values.set(arg.name, first);
         }
-        select.addEventListener("change", () =>
+        this.registerDomEvent(select, "change", () =>
           values.set(arg.name, select.value),
         );
         break;
@@ -429,6 +465,8 @@ export class FeynmanWorkflowsView extends ItemView {
         client: deps.client,
         getVaultMode: deps.getVaultMode,
         getModel: deps.getModel,
+        registry: deps.registry,
+        onLastEventIdAdvance: deps.onLastEventIdAdvance,
       });
       this.expanded = null;
       this.render();

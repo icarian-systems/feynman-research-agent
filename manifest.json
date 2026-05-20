@@ -1,9 +1,9 @@
 {
   "id": "feynman",
   "name": "Feynman",
-  "version": "0.0.1",
-  "minAppVersion": "1.4.0",
-  "description": "Feynman research agent for Obsidian. Runs prompts and skills against your vault via a local Docker server, a self-hosted backend, or the managed Modal tier.",
+  "version": "1.0.0",
+  "minAppVersion": "1.5.0",
+  "description": "Feynman research agent for Obsidian. Local Docker server with bring-your-own Anthropic key.",
   "author": "Alex Rogers",
   "isDesktopOnly": true
 }

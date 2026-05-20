@@ -3,10 +3,8 @@
 
 import { App, Modal, requestUrl } from "obsidian";
 
-// TODO: replace with the real waitlist id from getwaitlist.com once the
-// waitlist is created. The signup endpoint accepts a numeric id; until then
-// the modal will surface the API's error to the user.
-export const FEYNMAN_CLOUD_WAITLIST_ID = 0;
+// https://getwaitlist.com/waitlist/32833
+export const FEYNMAN_CLOUD_WAITLIST_ID = 32833;
 
 const SIGNUP_ENDPOINT = "https://api.getwaitlist.com/api/v1/signup";
 
@@ -57,9 +55,11 @@ export class WaitlistModal extends Modal {
       attr: { type: "submit" },
     });
 
+    // Modal isn't a Component; bare addEventListener is fine — contentEl
+    // is dropped on close, releasing both elements and their listeners.
     cancel.addEventListener("click", () => this.close());
 
-    form.addEventListener("submit", (ev) => {
+    const trySubmit = (ev: Event) => {
       ev.preventDefault();
       const email = input.value.trim();
       if (!EMAIL_RE.test(email)) {
@@ -68,9 +68,16 @@ export class WaitlistModal extends Modal {
         return;
       }
       void this.submitSignup(email, submit, cancel, input, status);
+    };
+
+    submit.addEventListener("click", trySubmit);
+    form.addEventListener("submit", trySubmit);
+    input.addEventListener("keydown", (ev: KeyboardEvent) => {
+      if (ev.key === "Enter") trySubmit(ev);
     });
 
-    // Focus the email field on open.
+    // Focus the email field on open. setTimeout(0) — the modal is short-
+    // lived and contentEl GCs on close.
     window.setTimeout(() => input.focus(), 0);
   }
 

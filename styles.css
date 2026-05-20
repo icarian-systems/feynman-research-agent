@@ -63,6 +63,24 @@
   align-items: center;
 }
 
+/* Loud disclosure copy under API-key inputs and onboarding card. Muted
+ * warning color rather than error red — we want it noticed, not panic. */
+.feynman-warning {
+  color: var(--text-warning);
+  font-size: 0.85em;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
+/* Inline validation error for self-hosted base-URL field. Painted under
+ * the input via `descEl` so it inherits Obsidian's description styling. */
+.feynman-error {
+  color: var(--text-error);
+  font-size: 0.85em;
+  margin-top: 4px;
+  line-height: 1.45;
+}
+
 /* ---- Workflows pane ---------------------------------------------- */
 
 .feynman-pane {
@@ -123,8 +141,8 @@
   border-radius: 50%;
   display: inline-block;
 }
-.feynman-status-dot.is-ok    { background: var(--color-green, #5d6f3d); }
-.feynman-status-dot.is-down  { background: var(--color-red, #8a3f30); }
+.feynman-status-dot.is-ok    { background: var(--color-green); }
+.feynman-status-dot.is-down  { background: var(--text-error); }
 
 .feynman-pane-body {
   padding: 12px 12px 16px;
@@ -246,7 +264,7 @@
 
 .feynman-wf.is-expanded .feynman-wf-btn {
   border-color: var(--interactive-accent);
-  background: var(--background-modifier-active, rgba(138, 112, 65, 0.06));
+  background: var(--background-modifier-active);
 }
 .feynman-wf.is-expanded .feynman-wf-slash { color: var(--interactive-accent); }
 .feynman-wf.is-expanded .feynman-wf-arrow {
@@ -271,7 +289,7 @@
   margin-top: 8px;
   margin-bottom: 4px;
   padding: 12px 14px;
-  background: var(--background-primary-alt, var(--background-secondary));
+  background: var(--background-primary-alt);
   border: 1px solid var(--background-modifier-border);
   border-left: 2px solid var(--interactive-accent);
   border-radius: 0 4px 4px 0;
@@ -453,13 +471,16 @@
   gap: 8px;
 }
 .feynman-tool-call summary::-webkit-details-marker { display: none; }
-.feynman-tool-call summary::before {
-  content: "›";
+/* Tool-call disclosure arrow lives in an inline `<span aria-hidden>` now —
+   see chat-view's handleToolCall. The pseudo-content rule was screen-reader
+   hostile and broke when Obsidian themes overrode `--text-faint`. */
+.feynman-tool-call .feynman-tool-arrow {
   color: var(--text-faint);
   transition: transform 0.15s ease;
   display: inline-block;
+  margin-right: 6px;
 }
-.feynman-tool-call details[open] summary::before { transform: rotate(90deg); }
+.feynman-tool-call details[open] .feynman-tool-arrow { transform: rotate(90deg); }
 .feynman-tool-args {
   margin: 6px 0 0 12px;
   padding: 6px 10px;
@@ -475,8 +496,11 @@
   font-size: 11.5px;
   color: var(--text-faint);
 }
-.feynman-tool-result-ok::before  { content: "✓"; color: var(--color-green, #5d6f3d); margin-right: 5px; }
-.feynman-tool-result-err::before { content: "✗"; color: var(--color-red,   #8a3f30); margin-right: 5px; }
+/* Status glyphs are inlined via `<span aria-hidden>` in chat-view; the
+   pseudo-element rules would otherwise duplicate visible content for screen
+   readers. */
+.feynman-tool-result-ok .feynman-tool-glyph  { color: var(--color-green); margin-right: 5px; }
+.feynman-tool-result-err .feynman-tool-glyph { color: var(--text-error);  margin-right: 5px; }
 
 /* Artifact */
 .feynman-artifact a {
@@ -494,7 +518,7 @@
 .feynman-question {
   padding: 12px 14px;
   border-left: 2px solid var(--interactive-accent);
-  background: var(--background-modifier-active, rgba(138, 112, 65, 0.06));
+  background: var(--background-modifier-active);
   border-radius: 0 3px 3px 0;
 }
 .feynman-question .label {
@@ -542,10 +566,12 @@
   padding: 10px 0 18px;
   border-top: 1px solid var(--background-modifier-border);
 }
-.feynman-callout::before { content: "•"; color: var(--text-faint); }
-.feynman-callout-done::before  { color: var(--color-green, #5d6f3d); }
-.feynman-callout-error          { color: var(--color-red,   #8a3f30); }
-.feynman-callout-error::before  { color: var(--color-red,   #8a3f30); }
+/* Bullet glyph is now an inline aria-hidden span (chat-view); only the color
+   tokens remain so themes can override per-callout. */
+.feynman-callout .feynman-callout-glyph { color: var(--text-faint); }
+.feynman-callout-done .feynman-callout-glyph { color: var(--color-green); }
+.feynman-callout-error                        { color: var(--text-error); }
+.feynman-callout-error .feynman-callout-glyph { color: var(--text-error); }
 
 /* Tool-approval modal */
 .feynman-tool-approval-modal { max-width: 320px; }
@@ -599,7 +625,7 @@
   border-color: var(--interactive-accent);
 }
 .feynman-tool-approval-buttons button.mod-warning {
-  color: var(--color-red, #8a3f30);
+  color: var(--text-error);
 }
 
 /* Waitlist modal */
@@ -658,8 +684,8 @@
   margin-bottom: 8px;
 }
 .feynman-waitlist-status.is-info    { color: var(--text-muted); }
-.feynman-waitlist-status.is-error   { color: var(--color-red, #8a3f30); }
-.feynman-waitlist-status.is-success { color: var(--color-green, #5d6f3d); }
+.feynman-waitlist-status.is-error   { color: var(--text-error); }
+.feynman-waitlist-status.is-success { color: var(--color-green); }
 .feynman-waitlist-buttons {
   display: flex;
   gap: 6px;

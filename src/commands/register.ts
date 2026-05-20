@@ -22,10 +22,14 @@ import type {
   ManifestEntry,
   ManifestResponse,
   VaultMode,
-} from "@feynman/protocol";
+} from "../protocol";
 
 import type { FeynmanClient } from "../transport/client";
-import { openChatLeaf, runWorkflow } from "../workflow-runner";
+import {
+  openChatLeaf,
+  runWorkflow,
+  type ActiveRunRegistry,
+} from "../workflow-runner";
 import {
   VIEW_TYPE_FEYNMAN_WORKFLOWS,
 } from "../views/workflows-view";
@@ -37,24 +41,40 @@ export interface RegisterCommandsDeps {
   getVaultMode: () => VaultMode;
   /** Returns the currently picked model id, or undefined for server default. */
   getModel: () => string | undefined;
+  /** Active-run registry — forwarded to runWorkflow. */
+  registry?: ActiveRunRegistry;
+  /** Last-Event-ID persistence sink — forwarded to runWorkflow. */
+  onLastEventIdAdvance?: (runId: string, eventId: string) => void;
 }
 
 export function registerCommands(
   plugin: Plugin,
   deps: RegisterCommandsDeps,
 ): void {
-  const { client, manifest, getVaultMode, getModel } = deps;
+  const {
+    client,
+    manifest,
+    getVaultMode,
+    getModel,
+    registry,
+    onLastEventIdAdvance,
+  } = deps;
 
+  // Obsidian prepends the plugin name to every command name in the palette,
+  // so emitting "Feynman: …" would render as "Feynman: Feynman: …". Names
+  // here are kept short and verb-first.
   for (const entry of manifest.prompts) {
     plugin.addCommand({
       id: `feynman-${entry.slug}`,
-      name: `Feynman: ${entry.title}…`,
+      name: entry.title,
       callback: () => {
         new PromptArgsModal(plugin.app, entry, async (args) => {
           await runWorkflow(plugin.app, entry, args, {
             client,
             getVaultMode,
             getModel,
+            registry,
+            onLastEventIdAdvance,
           });
         }).open();
       },
@@ -63,7 +83,7 @@ export function registerCommands(
 
   plugin.addCommand({
     id: "feynman-open-chat",
-    name: "Feynman: Open chat",
+    name: "Open chat",
     callback: () => {
       void openChatLeaf(plugin.app);
     },
@@ -71,7 +91,7 @@ export function registerCommands(
 
   plugin.addCommand({
     id: "feynman-open-workflows",
-    name: "Feynman: Open workflows",
+    name: "Open workflows",
     callback: () => {
       void openWorkflowsLeaf(plugin);
     },
@@ -142,6 +162,8 @@ class PromptArgsModal extends Modal {
       cls: "mod-cta",
     });
     const cancelBtn = buttonsRow.createEl("button", { text: "Cancel" });
+    // Modal isn't a Component; bare addEventListener is fine — contentEl
+    // is dropped on close, releasing both elements and their listeners.
     submitBtn.addEventListener("click", () => {
       void this.submit(submitBtn);
     });

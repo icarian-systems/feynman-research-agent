@@ -13,3 +13,13 @@ export function bearerHeaders(token: string | null): Record<string, string> {
   }
   return { Authorization: `Bearer ${token}` };
 }
+
+/**
+ * Identifies the plugin build to the server on every request, used for
+ * server-side telemetry and version-skew diagnostics. The contract is
+ * documented in `docs/SETUP.md`; the server may emit a deprecation banner or
+ * 426 Upgrade Required when an unsupported client version is observed.
+ */
+export function clientHeaders(version: string): Record<string, string> {
+  return { "X-Feynman-Client": `obsidian-plugin/${version}` };
+}
