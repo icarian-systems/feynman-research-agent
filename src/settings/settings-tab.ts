@@ -4,17 +4,54 @@
 // picked a backend AND no server is reachable, the host plugin opens this
 // tab automatically (see main.ts onload).
 
-import { App, FileSystemAdapter, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, FileSystemAdapter, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
+import { platform } from "node:os";
 import type FeynmanPlugin from "../../main";
 import { WaitlistModal } from "../views/waitlist-modal";
+import { DockerDiagnoseModal } from "../views/docker-diagnose-modal";
+import { resolveBaseUrl as resolveBaseUrlForPlugin } from "./derive";
 import {
   DockerSupervisor,
   defaultEnvFilePath,
   DEFAULT_CONTAINER_NAME,
   generateAuthToken,
+  type DockerCheckReason,
   type DockerStatus,
 } from "../docker/supervisor";
 import type { DockerPrefs } from "../docker/prefs";
+
+/**
+ * Map a docker check failure to OS-specific, actionable copy. The caller
+ * already truncates the underlying detail; this helper produces the
+ * top-line guidance the user actually needs to fix the problem.
+ */
+export function dockerErrorMessage(
+  reason: DockerCheckReason,
+  plat: NodeJS.Platform = platform(),
+): string {
+  switch (reason) {
+    case "not-installed":
+      if (plat === "darwin") {
+        return "Docker Desktop not found. Install from docker.com, then quit and relaunch Obsidian (a GUI-launched app has a limited PATH).";
+      }
+      if (plat === "win32") {
+        return "Docker Desktop not found. Install from docker.com and reboot (or sign out and back in) to refresh the system PATH.";
+      }
+      return "Docker CLI not found. Install via your package manager (e.g. 'apt install docker.io').";
+    case "daemon-down":
+      if (plat === "darwin") {
+        return "Docker Desktop is not running. Start it from Applications and try again.";
+      }
+      if (plat === "win32") {
+        return "Docker Desktop is not running. Start it from the Start menu and wait for the whale icon to settle.";
+      }
+      return "Docker daemon not running. Try 'sudo systemctl start docker'.";
+    case "permission-denied":
+      return "Permission denied on the Docker socket. Run 'sudo usermod -aG docker $USER', then log out and back in.";
+    case "sandboxed":
+      return "Sandboxed Obsidian (Flatpak/Snap) cannot reach the Docker socket. Install the native .deb or .AppImage instead.";
+  }
+}
 
 /**
  * Truncate user-facing error bodies to a hard cap so a server that returns a
@@ -196,20 +233,30 @@ function getVaultBasePath(app: App): string {
 export class FeynmanSettingTab extends PluginSettingTab {
   private readonly plugin: FeynmanPlugin;
   /**
-   * Shared supervisor instance. The class is mostly stateless — it caches
-   * the last-chosen port + container name so subsequent `status()` /
-   * `stop()` calls on this tab session target the right container without
-   * re-asking. One instance per tab is enough.
+   * Shared supervisor instance. Owned by the plugin so the command-palette
+   * "Diagnose Docker" command and this settings tab agree on cached state
+   * (resolved binary path, last container name).
    */
-  private readonly supervisor = new DockerSupervisor();
+  private readonly supervisor: DockerSupervisor;
   /** Debounced save handle — see queueSave(). */
   private saveTimer: number | null = null;
   /** Container for the model-picker subtree so we can re-render in place. */
   private modelSection: HTMLElement | null = null;
+  /**
+   * Whether a container-affecting setting (API keys, image, port, mount) has
+   * changed since the container was started. Drives the "Restart to apply"
+   * banner.
+   */
+  private pendingRestart = false;
+  /** Cached from the last status probe; gates whether to show the banner. */
+  private lastKnownContainerRunning = false;
+  /** The "Restart to apply" banner element; null before renderDocker runs. */
+  private pendingRestartBanner: HTMLElement | null = null;
 
   constructor(app: App, plugin: FeynmanPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+    this.supervisor = plugin.supervisor;
   }
 
   /**
@@ -241,11 +288,14 @@ export class FeynmanSettingTab extends PluginSettingTab {
       this.renderOnboarding(containerEl);
     }
 
+    // Feynman Cloud / waitlist surfaces at the top — gated behind the
+    // waitlist feature flag (default on). Drawing attention before the
+    // Docker config gives early users a clear path to the hosted tier.
+    this.renderModalTier(containerEl);
     this.renderBackend(containerEl);
     this.renderDocker(containerEl);
     this.renderProviderKeys(containerEl);
     this.renderSelfHosted(containerEl);
-    this.renderModalTier(containerEl);
     this.renderModelPicker(containerEl);
     this.renderWorkspace(containerEl);
   }
@@ -254,14 +304,22 @@ export class FeynmanSettingTab extends PluginSettingTab {
   private buildDockerPrefs(): DockerPrefs {
     const d = this.plugin.settings.docker;
     const vaultRoot = getVaultBasePath(this.app);
+    // Defensive reads — a stale data.json from an older release may have
+    // a partial `docker` object missing fields added later. Treat any
+    // missing/non-string value as the empty string so the `.length > 0`
+    // checks below fall through to the default.
+    const imageTag = typeof d.imageTag === "string" ? d.imageTag : "";
+    const vaultMountPath =
+      typeof d.vaultMountPath === "string" ? d.vaultMountPath : "";
+    const authToken = typeof d.authToken === "string" ? d.authToken : "";
+    const hostPort = typeof d.hostPort === "number" ? d.hostPort : 0;
     return {
-      imageTag: d.imageTag.length > 0 ? d.imageTag : "icariansystems/feynman",
-      hostPort: d.hostPort,
+      imageTag: imageTag.length > 0 ? imageTag : "icariansystems/feynman",
+      hostPort,
       containerName: DEFAULT_CONTAINER_NAME,
-      vaultMountSrc: d.vaultMountPath.length > 0 ? d.vaultMountPath : vaultRoot,
+      vaultMountSrc: vaultMountPath.length > 0 ? vaultMountPath : vaultRoot,
       vaultMountDst: "/vault",
-      // Read persisted token; runDockerSetup populates it on first start.
-      authToken: d.authToken,
+      authToken,
     };
   }
 
@@ -307,13 +365,17 @@ export class FeynmanSettingTab extends PluginSettingTab {
     const originalText = btn.getText?.() ?? "Set up Docker";
     btn.setAttr("disabled", "true");
     statusEl.setText("Container: setting up…");
+    new Notice("Feynman: setting up Docker…");
+    console.log("[feynman] runDockerSetup: start");
     try {
+      console.log("[feynman] runDockerSetup: check()");
       const check = await this.supervisor.check();
-      if (!check.ok) {
-        const reason = check.reason ?? "unknown";
+      console.log("[feynman] runDockerSetup: check result", check);
+      if (!check.ok && check.reason !== undefined) {
+        const guidance = dockerErrorMessage(check.reason);
         const detail = check.detail ?? "";
         new Notice(
-          `Feynman: Docker check failed (${reason})${detail.length > 0 ? ` — ${truncate(detail)}` : ""}`,
+          `Feynman: ${guidance}${detail.length > 0 ? ` (${truncate(detail)})` : ""}`,
         );
         await this.refreshStatusIndicator(statusEl);
         return;
@@ -321,27 +383,35 @@ export class FeynmanSettingTab extends PluginSettingTab {
 
       const prefs = this.buildDockerPrefs();
       const envFilePath = defaultEnvFilePath();
+      console.log("[feynman] runDockerSetup: prefs", {
+        imageTag: prefs.imageTag,
+        hostPort: prefs.hostPort,
+        containerName: prefs.containerName,
+        vaultMountSrc: prefs.vaultMountSrc,
+        envFilePath,
+        hasAuthToken: prefs.authToken.length > 0,
+      });
 
-      // First-start bearer-token generation. If no token is persisted, mint
-      // one and save it before launching the container; the supervisor
-      // writes it into the env-file so the server can match incoming
-      // `Authorization: Bearer …` headers against `FEYNMAN_AUTH_TOKEN`.
       if (prefs.authToken.length === 0) {
         const token = generateAuthToken();
         prefs.authToken = token;
         this.plugin.settings.docker.authToken = token;
         await this.plugin.saveSettings();
+        console.log("[feynman] runDockerSetup: minted new auth token");
       }
 
       statusEl.setText("Container: pulling image…");
       btn.setText("Pulling image…");
+      new Notice(`Feynman: resolving image '${prefs.imageTag}'…`);
       try {
+        console.log("[feynman] runDockerSetup: pull()", prefs.imageTag);
         await this.supervisor.pull(prefs.imageTag, (line) => {
-          // Surface the trailing progress line on the status indicator.
-          // `docker pull` lines are short enough to fit.
           statusEl.setText(`Pulling: ${line}`);
+          console.log("[feynman] pull progress:", line);
         });
+        console.log("[feynman] runDockerSetup: pull() done");
       } catch (err) {
+        console.error("[feynman] runDockerSetup: pull() failed", err);
         new Notice(
           `Feynman: pull failed — ${truncate(err instanceof Error ? err.message : String(err))}`,
         );
@@ -351,6 +421,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
 
       statusEl.setText("Container: starting…");
       btn.setText("Starting…");
+      new Notice("Feynman: starting container…");
       try {
         // Populate the env-file with the Anthropic key + bearer token. The
         // supervisor writes it with chmod 600 on POSIX so other local users
@@ -379,12 +450,14 @@ export class FeynmanSettingTab extends PluginSettingTab {
         if (providerKeys.gemini !== undefined && providerKeys.gemini.length > 0) {
           envVars.GEMINI_API_KEY = providerKeys.gemini;
         }
+        console.log("[feynman] runDockerSetup: start()", {
+          envKeys: Object.keys(envVars),
+        });
         const result = await this.supervisor.start(prefs, envFilePath, envVars);
+        console.log("[feynman] runDockerSetup: start() done", result);
         new Notice(
-          `Feynman: server running on port ${String(result.port)}`,
+          `Feynman: server running (container ${result.containerName} on port ${String(result.port)})`,
         );
-        // Settings haven't been told the chosen port (auto-bump may have
-        // moved it); persist if the supervisor picked something else.
         if (
           this.plugin.settings.docker.hostPort !== result.port &&
           this.plugin.settings.docker.hostPort !== 0
@@ -393,11 +466,27 @@ export class FeynmanSettingTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         }
       } catch (err) {
+        console.error("[feynman] runDockerSetup: start() failed", err);
         new Notice(
           `Feynman: start failed — ${truncate(err instanceof Error ? err.message : String(err))}`,
         );
         await this.refreshStatusIndicator(statusEl);
         return;
+      }
+
+      // `docker run -d` returns as soon as the container is *created*,
+      // not when the Node process inside it has finished booting and bound
+      // the port. Without a wait, the immediate refreshConnection() probe
+      // races the server's startup and reports ERR_EMPTY_RESPONSE. Poll
+      // /v1/health with a short per-attempt timeout until either it
+      // responds or we give up after ~30s.
+      statusEl.setText("Container: waiting for server…");
+      btn.setText("Waiting…");
+      const ready = await this.waitForServerReady(30_000);
+      if (!ready) {
+        new Notice(
+          "Feynman: container started but server didn't respond within 30s. Check 'docker logs feynman-server' for the cause.",
+        );
       }
 
       // Reconnect the plugin's transport client so the workflows pane
@@ -408,6 +497,35 @@ export class FeynmanSettingTab extends PluginSettingTab {
       btn.removeAttribute("disabled");
       btn.setText(originalText);
     }
+  }
+
+  /**
+   * Poll the configured backend URL's /v1/health until it responds or the
+   * budget expires. Uses Obsidian's `requestUrl` helper which runs in the
+   * main process and bypasses the renderer's CORS enforcement — `fetch()`
+   * from the renderer is blocked because the loopback server doesn't
+   * return Access-Control-Allow-Origin headers. Auth status doesn't matter
+   * here — even a 401 confirms the server is up.
+   */
+  private async waitForServerReady(budgetMs: number): Promise<boolean> {
+    const url = `${resolveBaseUrlForPlugin(this.plugin.settings)}/v1/health`;
+    const deadline = Date.now() + budgetMs;
+    let attempt = 0;
+    while (Date.now() < deadline) {
+      attempt++;
+      try {
+        const res = await requestUrl({ url, method: "GET", throw: false });
+        if (res.status > 0) {
+          console.log(`[feynman] waitForServerReady: ready after ${attempt} probes (${res.status})`);
+          return true;
+        }
+      } catch {
+        // Connect refused / empty response — keep polling.
+      }
+      await new Promise<void>((r) => setTimeout(r, 500));
+    }
+    console.warn(`[feynman] waitForServerReady: gave up after ${attempt} probes`);
+    return false;
   }
 
   // -------------------------------------------------------------------
@@ -475,6 +593,14 @@ export class FeynmanSettingTab extends PluginSettingTab {
     });
     this.plugin.registerDomEvent(pullLatestBtn, "click", () => {
       void this.runPullLatest(pullLatestBtn, dockerStatusEl);
+    });
+
+    const diagnoseBtn = dockerActions.createEl("button", {
+      text: "Diagnose Docker",
+      attr: { type: "button" },
+    });
+    this.plugin.registerDomEvent(diagnoseBtn, "click", () => {
+      new DockerDiagnoseModal(this.app, this.supervisor).open();
     });
 
     // --- Option 2: Feynman Cloud (waitlist) ---------------------------
@@ -597,6 +723,19 @@ export class FeynmanSettingTab extends PluginSettingTab {
     const head = new Setting(host).setName("Local Docker").setHeading();
     head.settingEl.addClass("feynman-section-docker");
 
+    // ----- "Restart to apply" banner (hidden unless settings are dirty AND
+    // the container is running) -----
+    this.pendingRestartBanner = host.createDiv({ cls: "feynman-restart-banner" });
+    this.renderPendingRestartBannerContent(this.pendingRestartBanner);
+    this.updatePendingRestartBannerVisibility();
+
+    // ----- Container status panel (re-renders based on current state) -----
+    const statusPanel = host.createDiv({ cls: "feynman-docker-status-panel" });
+    void this.renderDockerStatusPanel(statusPanel);
+
+    // ----- Configuration subsection -----
+    new Setting(host).setName("Configuration").setHeading();
+
     new Setting(host)
       .setName("Image")
       .setDesc(
@@ -611,6 +750,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
           .onChange((v) => {
             this.plugin.settings.docker.imageTag = v;
             this.queueSave();
+            this.notePendingRestart();
           }),
       );
 
@@ -630,6 +770,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
           portErrorEl.style.display = "none";
           this.plugin.settings.docker.hostPort = Number.isFinite(n) ? n : 0;
           this.queueSave();
+          this.notePendingRestart();
         } else {
           portErrorEl.setText(validation.error);
           portErrorEl.style.display = "block";
@@ -637,9 +778,6 @@ export class FeynmanSettingTab extends PluginSettingTab {
       });
     });
 
-    // Vault mount path — the absolute host path the supervisor bind-mounts
-    // into /vault. Default placeholder shows the Obsidian vault root so the
-    // user can leave it empty to mean "this vault".
     const vaultRoot = getVaultBasePath(this.app);
     new Setting(host)
       .setName("Vault mount path")
@@ -652,8 +790,12 @@ export class FeynmanSettingTab extends PluginSettingTab {
         t.onChange((v) => {
           this.plugin.settings.docker.vaultMountPath = v;
           this.queueSave();
+          this.notePendingRestart();
         });
       });
+
+    // ----- Authentication subsection -----
+    new Setting(host).setName("Authentication").setHeading();
 
     const anthropicSetting = new Setting(host)
       .setName("Anthropic API key")
@@ -665,47 +807,15 @@ export class FeynmanSettingTab extends PluginSettingTab {
         t.onChange((v) => {
           this.plugin.settings.docker.apiKeys.anthropic = v;
           this.queueSave();
+          this.notePendingRestart();
         });
       });
-    // Loud disclosure: keys land in plaintext on disk, and Obsidian Sync
-    // will replicate the file across devices if "Sync plugin config" is on.
-    // Users have to opt out at the Sync settings level — the plugin can't
-    // unilaterally exclude itself from sync (no public API).
     anthropicSetting.descEl
       .createDiv({ cls: "feynman-warning" })
       .setText(
         "Stored locally in plaintext at <vault>/.obsidian/plugins/feynman/data.json. " +
           'If you use Obsidian Sync with "Sync plugin config" enabled, this will sync to other devices.',
       );
-
-    // Container state indicator + setup controls. Always present so the
-    // user can re-run setup or pull a newer image after onboarding.
-    const dockerSetupRow = host.createDiv({ cls: "feynman-docker-setup" });
-    const setupStatusEl = dockerSetupRow.createSpan({
-      cls: "feynman-docker-state",
-      text: "Container: checking…",
-    });
-    void this.refreshStatusIndicator(setupStatusEl);
-
-    const setupActions = dockerSetupRow.createDiv({
-      cls: "feynman-docker-setup-actions",
-    });
-    const setupBtn = setupActions.createEl("button", {
-      cls: "mod-cta",
-      text: "Set up Docker",
-      attr: { type: "button" },
-    });
-    this.plugin.registerDomEvent(setupBtn, "click", () => {
-      void this.runDockerSetup(setupBtn, setupStatusEl);
-    });
-
-    const pullBtn = setupActions.createEl("button", {
-      text: "Pull latest image",
-      attr: { type: "button" },
-    });
-    this.plugin.registerDomEvent(pullBtn, "click", () => {
-      void this.runPullLatest(pullBtn, setupStatusEl);
-    });
 
     new Setting(host)
       .setName("Test connection")
@@ -715,6 +825,236 @@ export class FeynmanSettingTab extends PluginSettingTab {
           await this.testConnection(b.buttonEl);
         });
       });
+  }
+
+  /**
+   * Render the container status card + context-sensitive action buttons.
+   * Re-rendered in place after setup/stop/pull so the UI tracks state.
+   */
+  private async renderDockerStatusPanel(panel: HTMLElement): Promise<void> {
+    panel.empty();
+
+    // Loading shimmer while we probe.
+    const loading = panel.createDiv({ cls: "feynman-docker-status-card" });
+    const loadingPill = loading.createSpan({
+      cls: "feynman-docker-pill feynman-docker-pill-checking",
+    });
+    loadingPill.createSpan({ cls: "feynman-docker-pill-dot" });
+    loadingPill.createSpan({ text: "Checking container status…" });
+
+    let status: DockerStatus;
+    try {
+      status = await this.supervisor.status();
+    } catch {
+      status = "not-installed";
+    }
+    this.lastKnownContainerRunning = status === "running";
+    this.updatePendingRestartBannerVisibility();
+
+    panel.empty();
+
+    const card = panel.createDiv({ cls: "feynman-docker-status-card" });
+    const header = card.createDiv({ cls: "feynman-docker-status-header" });
+
+    // Status pill.
+    const pill = header.createSpan({
+      cls: `feynman-docker-pill feynman-docker-pill-${status}`,
+    });
+    pill.createSpan({ cls: "feynman-docker-pill-dot" });
+    pill.createSpan({ text: this.statusLabel(status) });
+
+    // Detail line (image + port) when running. Useful so users see at a
+    // glance which image is loaded and where it's reachable.
+    if (status === "running") {
+      const detail = header.createDiv({ cls: "feynman-docker-status-detail" });
+      const imageTag =
+        this.plugin.settings.docker.imageTag.length > 0
+          ? this.plugin.settings.docker.imageTag
+          : "icariansystems/feynman";
+      const hostPort =
+        this.plugin.settings.docker.hostPort > 0
+          ? this.plugin.settings.docker.hostPort
+          : 7777;
+      detail.setText(`${imageTag} • http://127.0.0.1:${String(hostPort)}`);
+    }
+
+    // Action buttons. Context-sensitive: running → Stop/Restart, otherwise
+    // Set up / Diagnose. Pull and Diagnose stay available across states.
+    const actions = card.createDiv({ cls: "feynman-docker-status-actions" });
+
+    if (status === "running") {
+      const stopBtn = actions.createEl("button", {
+        cls: "mod-warning",
+        text: "Stop container",
+        attr: { type: "button" },
+      });
+      this.plugin.registerDomEvent(stopBtn, "click", () => {
+        void this.runDockerStop(stopBtn, panel);
+      });
+
+      const restartBtn = actions.createEl("button", {
+        text: "Restart",
+        attr: { type: "button" },
+      });
+      this.plugin.registerDomEvent(restartBtn, "click", () => {
+        void this.runDockerRestart(restartBtn, panel);
+      });
+    } else if (status === "stopped") {
+      const startBtn = actions.createEl("button", {
+        cls: "mod-cta",
+        text: "Start container",
+        attr: { type: "button" },
+      });
+      this.plugin.registerDomEvent(startBtn, "click", () => {
+        void this.runDockerSetupAndRefresh(startBtn, panel);
+      });
+    } else {
+      // not-installed
+      const setupBtn = actions.createEl("button", {
+        cls: "mod-cta",
+        text: "Set up Docker",
+        attr: { type: "button" },
+      });
+      this.plugin.registerDomEvent(setupBtn, "click", () => {
+        void this.runDockerSetupAndRefresh(setupBtn, panel);
+      });
+    }
+
+    const pullBtn = actions.createEl("button", {
+      text: "Pull latest image",
+      attr: { type: "button" },
+    });
+    this.plugin.registerDomEvent(pullBtn, "click", () => {
+      void this.runPullLatestAndRefresh(pullBtn, panel);
+    });
+
+    const diagnoseBtn = actions.createEl("button", {
+      text: "Diagnose Docker",
+      attr: { type: "button" },
+    });
+    this.plugin.registerDomEvent(diagnoseBtn, "click", () => {
+      new DockerDiagnoseModal(this.app, this.supervisor).open();
+    });
+  }
+
+  /** Run setup, then re-render the status panel so the UI catches up. */
+  private async runDockerSetupAndRefresh(
+    btn: HTMLButtonElement,
+    panel: HTMLElement,
+  ): Promise<void> {
+    const inlineStatus = panel.querySelector(".feynman-docker-pill") as HTMLElement | null;
+    const target =
+      inlineStatus ?? panel.createSpan({ cls: "feynman-docker-state" });
+    await this.runDockerSetup(btn, target);
+    await this.renderDockerStatusPanel(panel);
+    this.clearPendingRestart();
+  }
+
+  /**
+   * Mark container-affecting settings as dirty. Called from every onChange
+   * handler whose value lands in the container's env or `docker run` args.
+   * Shows the "Restart to apply" banner if the container is currently up.
+   */
+  private notePendingRestart(): void {
+    if (this.pendingRestart) return;
+    this.pendingRestart = true;
+    this.updatePendingRestartBannerVisibility();
+  }
+
+  /** Clear the dirty flag and hide the banner. Called after a successful
+   *  setup/restart so the user knows the running container is in sync. */
+  private clearPendingRestart(): void {
+    this.pendingRestart = false;
+    this.updatePendingRestartBannerVisibility();
+  }
+
+  /** Show the banner iff settings are dirty AND a container is running. */
+  private updatePendingRestartBannerVisibility(): void {
+    if (this.pendingRestartBanner === null) return;
+    const show = this.pendingRestart && this.lastKnownContainerRunning;
+    this.pendingRestartBanner.style.display = show ? "" : "none";
+  }
+
+  /** Build the static banner content. The element itself is shown/hidden
+   *  by `updatePendingRestartBannerVisibility`. */
+  private renderPendingRestartBannerContent(host: HTMLElement): void {
+    host.empty();
+    const inner = host.createDiv({ cls: "feynman-restart-banner-inner" });
+    inner.createSpan({
+      cls: "feynman-restart-banner-text",
+      text: "Settings changed — restart the container to apply.",
+    });
+    const restartBtn = inner.createEl("button", {
+      text: "Restart now",
+      cls: "mod-cta",
+      attr: { type: "button" },
+    });
+    this.plugin.registerDomEvent(restartBtn, "click", () => {
+      const panel = this.containerEl.querySelector(
+        ".feynman-docker-status-panel",
+      ) as HTMLElement | null;
+      if (panel === null) return;
+      void this.runDockerRestart(restartBtn, panel);
+    });
+  }
+
+  private async runPullLatestAndRefresh(
+    btn: HTMLButtonElement,
+    panel: HTMLElement,
+  ): Promise<void> {
+    const inlineStatus = panel.querySelector(".feynman-docker-pill") as HTMLElement | null;
+    const target =
+      inlineStatus ?? panel.createSpan({ cls: "feynman-docker-state" });
+    await this.runPullLatest(btn, target);
+    await this.renderDockerStatusPanel(panel);
+  }
+
+  /** Stop the running container, then re-render the status panel. */
+  private async runDockerStop(
+    btn: HTMLButtonElement,
+    panel: HTMLElement,
+  ): Promise<void> {
+    const originalText = btn.getText?.() ?? "Stop container";
+    btn.setAttr("disabled", "true");
+    btn.setText("Stopping…");
+    new Notice("Feynman: stopping container…");
+    try {
+      await this.supervisor.stop();
+      new Notice("Feynman: container stopped.");
+    } catch (err) {
+      console.error("[feynman] runDockerStop failed", err);
+      new Notice(
+        `Feynman: stop failed — ${truncate(err instanceof Error ? err.message : String(err))}`,
+      );
+    } finally {
+      btn.removeAttribute("disabled");
+      btn.setText(originalText);
+      await this.renderDockerStatusPanel(panel);
+    }
+  }
+
+  /** Stop → setup. Used by the Restart button when the container is up. */
+  private async runDockerRestart(
+    btn: HTMLButtonElement,
+    panel: HTMLElement,
+  ): Promise<void> {
+    const originalText = btn.getText?.() ?? "Restart";
+    btn.setAttr("disabled", "true");
+    btn.setText("Restarting…");
+    try {
+      await this.supervisor.stop();
+    } catch (err) {
+      console.warn("[feynman] runDockerRestart: stop failed (continuing)", err);
+    }
+    // Reuse the setup path for the start half — it handles env-file,
+    // port probe, image resolution, and the post-start health wait.
+    const target = panel.createSpan({ cls: "feynman-docker-state" });
+    target.style.display = "none"; // hidden — surface progress via Notices
+    await this.runDockerSetup(btn, target);
+    btn.removeAttribute("disabled");
+    btn.setText(originalText);
+    await this.renderDockerStatusPanel(panel);
+    this.clearPendingRestart();
   }
 
   /**
@@ -758,6 +1098,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
               this.plugin.settings.providerKeys[f.key] = v;
             }
             this.queueSave();
+            this.notePendingRestart();
           });
         });
       setting.descEl
@@ -881,14 +1222,28 @@ export class FeynmanSettingTab extends PluginSettingTab {
   }
 
   private renderModalTier(host: HTMLElement): void {
-    new Setting(host).setName("Feynman Cloud (coming soon)").setHeading();
+    // Wrap the whole tier in a highlighted card so it visually separates
+    // from the rest of the settings (this is the only "promo" section).
+    const card = host.createDiv({ cls: "feynman-cloud-card" });
+
+    const headingRow = card.createDiv({ cls: "feynman-cloud-card-heading" });
+    headingRow.createEl("h3", { text: "Feynman Cloud" });
+    headingRow.createSpan({
+      cls: "feynman-cloud-badge",
+      text: "Coming soon",
+    });
+
+    card
+      .createDiv({ cls: "feynman-cloud-card-body" })
+      .setText(
+        "Managed compute, managed keys, no Docker. Monthly subscription. " +
+          "The hosted tier ships in a future release.",
+      );
 
     if (this.plugin.settings.features.waitlist.enabled) {
-      new Setting(host)
+      new Setting(card)
         .setName("Join the waitlist")
-        .setDesc(
-          "Managed compute, managed keys, no Docker. Sign up to be notified when the hosted tier (M5) ships.",
-        )
+        .setDesc("Sign up to be notified when Feynman Cloud opens.")
         .addButton((b) =>
           b
             .setButtonText("Join waitlist")
@@ -899,9 +1254,9 @@ export class FeynmanSettingTab extends PluginSettingTab {
         );
     }
 
-    new Setting(host)
+    new Setting(card)
       .setName("License key")
-      .setDesc("Available with the hosted tier (M5). Disabled until then.")
+      .setDesc("Available with the hosted tier. Disabled until then.")
       .addText((t) => {
         t.inputEl.disabled = true;
         t.setPlaceholder("disabled");

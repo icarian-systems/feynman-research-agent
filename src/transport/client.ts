@@ -10,6 +10,8 @@
 // the result as an AsyncIterable<Event>. Reconnect on socket drop with an
 // exponential back-off and the latest seen event id sent as `Last-Event-ID`.
 
+import { requestUrl } from "obsidian";
+
 import {
   PATHS,
   type Event,
@@ -357,59 +359,78 @@ export class FeynmanClient {
     return (await res.json()) as T;
   }
 
-  async health(): Promise<HealthResponse> {
-    const res = await fetch(this.url(PATHS.health), {
-      method: "GET",
-      headers: this.headers({ Accept: "application/json" }),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+  /**
+   * Non-streaming request helper that goes through Obsidian's `requestUrl`.
+   * The renderer's `fetch()` enforces CORS preflight on the Authorization +
+   * X-Feynman-Client headers we send, and the local Feynman server doesn't
+   * return Access-Control-Allow-Origin headers — so `fetch` is blocked.
+   * `requestUrl` runs in the Electron main process and isn't subject to
+   * CORS. SSE stays on `fetch` because `requestUrl` can't stream.
+   */
+  private async requestJson<T>(opts: {
+    path: string;
+    method?: "GET" | "POST";
+    extraHeaders?: Record<string, string>;
+    body?: string;
+    /** Tolerate this exact non-2xx status as success. Used for cancel(204). */
+    okStatus?: number;
+  }): Promise<T> {
+    const res = await requestUrl({
+      url: this.url(opts.path),
+      method: opts.method ?? "GET",
+      headers: this.headers(opts.extraHeaders),
+      body: opts.body,
+      throw: false,
     });
-    return this.json<HealthResponse>(res);
+    if (res.status < 200 || res.status >= 300) {
+      if (opts.okStatus !== undefined && res.status === opts.okStatus) {
+        return undefined as T;
+      }
+      throw new Error(
+        formatHttpError(res.status, "", res.text, this.url(opts.path)),
+      );
+    }
+    // requestUrl exposes `.json` (parsed from `.text` if Content-Type is JSON).
+    // For void-typed methods, callers ignore the return.
+    return res.json as T;
+  }
+
+  async health(): Promise<HealthResponse> {
+    return this.requestJson<HealthResponse>({
+      path: PATHS.health,
+      extraHeaders: { Accept: "application/json" },
+    });
   }
 
   async manifest(): Promise<ManifestResponse> {
-    const res = await fetch(this.url(PATHS.manifest), {
-      method: "GET",
-      headers: this.headers({ Accept: "application/json" }),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    return this.requestJson<ManifestResponse>({
+      path: PATHS.manifest,
+      extraHeaders: { Accept: "application/json" },
     });
-    return this.json<ManifestResponse>(res);
   }
 
   async getRun(runId: string): Promise<RunStateResponse> {
-    const res = await fetch(this.url(PATHS.runState(runId)), {
-      method: "GET",
-      headers: this.headers({ Accept: "application/json" }),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+    return this.requestJson<RunStateResponse>({
+      path: PATHS.runState(runId),
+      extraHeaders: { Accept: "application/json" },
     });
-    return this.json<RunStateResponse>(res);
   }
 
   async cancel(runId: string): Promise<void> {
-    const res = await fetch(this.url(PATHS.runCancel(runId)), {
+    await this.requestJson<void>({
+      path: PATHS.runCancel(runId),
       method: "POST",
-      headers: this.headers(),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
+      okStatus: 204,
     });
-    if (!res.ok && res.status !== 204) {
-      throw new Error(
-        `HTTP ${res.status} ${res.statusText} cancelling run ${runId}`,
-      );
-    }
   }
 
   async postInput(runId: string, input: Input): Promise<void> {
-    const res = await fetch(this.url(PATHS.runInput(runId)), {
+    await this.requestJson<void>({
+      path: PATHS.runInput(runId),
       method: "POST",
-      headers: this.headers({ "Content-Type": "application/json" }),
+      extraHeaders: { "Content-Type": "application/json" },
       body: JSON.stringify(input),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
-      throw new Error(
-        formatHttpError(res.status, res.statusText, detail, `runs/${runId}/input`),
-      );
-    }
   }
 
   async postRun(req: RunRequest): Promise<RunResponse> {
@@ -417,17 +438,16 @@ export class FeynmanClient {
     // retries / accidental double-click. Server dedupes on this key for a
     // bounded window (§5.4 dedupe contract).
     const idempotencyKey = generateIdempotencyKey();
-    const res = await fetch(this.url(PATHS.run), {
+    return this.requestJson<RunResponse>({
+      path: PATHS.run,
       method: "POST",
-      headers: this.headers({
+      extraHeaders: {
         "Content-Type": "application/json",
         Accept: "application/json",
         "Idempotency-Key": idempotencyKey,
-      }),
+      },
       body: JSON.stringify(req),
-      signal: AbortSignal.timeout(HTTP_TIMEOUT_MS),
     });
-    return this.json<RunResponse>(res);
   }
 
   /**

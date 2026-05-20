@@ -714,3 +714,157 @@
   opacity: 0.5;
   cursor: progress;
 }
+
+/* ----- Docker status panel ---------------------------------------------- */
+
+.feynman-docker-status-panel {
+  margin: 1em 0 1.5em;
+}
+.feynman-docker-status-card {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.75em;
+  padding: 0.85em 1em;
+  border-radius: 6px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+}
+.feynman-docker-status-header {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25em;
+  min-width: 0;
+  flex: 1;
+}
+.feynman-docker-status-detail {
+  color: var(--text-muted);
+  font-size: 0.85em;
+  font-family: var(--font-monospace);
+  word-break: break-all;
+}
+.feynman-docker-status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4em;
+  align-items: center;
+}
+
+/* Status pill with a colored dot. */
+.feynman-docker-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5em;
+  font-weight: 500;
+  color: var(--text-normal);
+}
+.feynman-docker-pill-dot {
+  display: inline-block;
+  width: 0.65em;
+  height: 0.65em;
+  border-radius: 50%;
+  background: var(--text-muted);
+  box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 18%, transparent);
+}
+.feynman-docker-pill-running .feynman-docker-pill-dot {
+  background: var(--color-green, #3fb950);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-green, #3fb950) 25%, transparent);
+}
+.feynman-docker-pill-stopped .feynman-docker-pill-dot {
+  background: var(--color-yellow, #d4a72c);
+}
+.feynman-docker-pill-not-installed .feynman-docker-pill-dot {
+  background: var(--text-error, #d04848);
+}
+.feynman-docker-pill-checking .feynman-docker-pill-dot {
+  background: var(--text-muted);
+  animation: feynman-pulse 1.2s ease-in-out infinite;
+}
+@keyframes feynman-pulse {
+  0%, 100% { opacity: 0.3; }
+  50%      { opacity: 1; }
+}
+
+/* ----- Feynman Cloud (waitlist) promo card ----------------------------- */
+
+.feynman-cloud-card {
+  margin: 1em 0 1.75em;
+  padding: 1.15em 1.25em 0.35em;
+  border-radius: 8px;
+  border: 1px solid color-mix(in srgb, #8b5cf6 35%, transparent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, #8b5cf6 12%, transparent);
+  background: color-mix(in srgb, #8b5cf6 4%, var(--background-secondary));
+}
+.feynman-cloud-card-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.6em;
+  margin: 0;
+}
+.feynman-cloud-card-heading h3 {
+  margin: 0;
+  font-size: 1.05em;
+  font-weight: 600;
+}
+.feynman-cloud-badge {
+  font-size: 0.7em;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding: 0.15em 0.55em;
+  border-radius: 999px;
+  background: color-mix(in srgb, #8b5cf6 18%, transparent);
+  color: color-mix(in srgb, #8b5cf6 80%, var(--text-normal));
+  border: 1px solid color-mix(in srgb, #8b5cf6 35%, transparent);
+}
+.feynman-cloud-card-body {
+  color: var(--text-muted);
+  margin: 0.45em 0 0.5em;
+  font-size: 0.92em;
+  line-height: 1.4;
+}
+/* Flatten Obsidian's card-styled `.setting-item` inside our card so the
+   inner rows don't render as nested boxes. Each row blends with the card
+   background, separated by a single thin purple-tinted rule, and aligns
+   flush with the heading + body text above. */
+.feynman-cloud-card .setting-item {
+  background: transparent !important;
+  border: 0 !important;
+  border-top: 1px solid color-mix(in srgb, #8b5cf6 22%, transparent) !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 0.85em 0 !important;
+}
+.feynman-cloud-card .setting-item-info,
+.feynman-cloud-card .setting-item-control {
+  padding-left: 0;
+  padding-right: 0;
+}
+.feynman-cloud-card .setting-item-name {
+  font-weight: 500;
+}
+
+/* ----- "Settings changed — restart to apply" banner -------------------- */
+
+.feynman-restart-banner {
+  margin: 0.75em 0 1em;
+  padding: 0.7em 0.9em;
+  border-radius: 6px;
+  border: 1px solid var(--color-yellow, #d4a72c);
+  background: color-mix(in srgb, var(--color-yellow, #d4a72c) 10%, var(--background-secondary));
+}
+.feynman-restart-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.75em;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+.feynman-restart-banner-text {
+  color: var(--text-normal);
+  font-size: 0.92em;
+  flex: 1;
+  min-width: 220px;
+}

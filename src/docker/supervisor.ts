@@ -23,6 +23,7 @@ import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:net";
 import { randomBytes } from "node:crypto";
+import { existsSync } from "node:fs";
 
 import type { DockerPrefs } from "./prefs";
 
@@ -41,14 +42,24 @@ export interface DockerCheckResult {
   ok: boolean;
   /**
    * One of:
-   *  - "not-installed" → `docker` binary missing on PATH.
-   *  - "daemon-down"   → binary present but `docker info` failed.
+   *  - "not-installed"     → `docker` binary missing on PATH and all known
+   *                          install locations.
+   *  - "daemon-down"       → binary present but `docker info` could not
+   *                          reach the daemon.
+   *  - "permission-denied" → Linux: socket exists but the user lacks
+   *                          permission (usually missing docker group).
+   *  - "sandboxed"         → Linux: Obsidian is running inside Flatpak/Snap
+   *                          and cannot reach the daemon socket.
    *  - undefined when ok=true.
    */
-  reason?: "not-installed" | "daemon-down";
+  reason?: "not-installed" | "daemon-down" | "permission-denied" | "sandboxed";
   /** Optional human-readable detail attached when ok=false. */
   detail?: string;
+  /** Populated when reason="not-installed": the candidate paths we tried. */
+  attempted?: string[];
 }
+
+export type DockerCheckReason = NonNullable<DockerCheckResult["reason"]>;
 
 export type DockerStatus = "running" | "stopped" | "not-installed";
 
@@ -112,6 +123,106 @@ interface SpawnResult {
   code: number | null;
   stdout: string;
   stderr: string;
+}
+
+/**
+ * Platform-specific candidate directories the Docker CLI is commonly
+ * installed into. Obsidian launched from a GUI on macOS inherits launchd's
+ * stripped PATH (typically `/usr/bin:/bin:/usr/sbin:/sbin`) and cannot see
+ * the `/usr/local/bin/docker` symlink Docker Desktop creates. We prepend
+ * these to spawn env on the affected platforms. Linux distros generally
+ * inherit a usable PATH from the desktop session.
+ */
+export function dockerPathExtras(plat: NodeJS.Platform = platform()): string[] {
+  if (plat === "darwin") {
+    return [
+      "/usr/local/bin",
+      "/opt/homebrew/bin",
+      "/Applications/Docker.app/Contents/Resources/bin",
+    ];
+  }
+  if (plat === "win32") {
+    const localAppData = process.env.LOCALAPPDATA ?? "";
+    const candidates = ["C:\\Program Files\\Docker\\Docker\\resources\\bin"];
+    if (localAppData.length > 0) {
+      candidates.push(`${localAppData}\\Docker\\bin`);
+    }
+    return candidates;
+  }
+  return [];
+}
+
+/**
+ * Prepend `extras` to `basePath` without duplicating entries. Order is
+ * preserved; extras land first so a Docker Desktop install shadows any
+ * stale entries the user may have on PATH.
+ */
+export function augmentPath(
+  basePath: string,
+  extras: readonly string[],
+  sep = platform() === "win32" ? ";" : ":",
+): string {
+  const parts = basePath.length > 0 ? basePath.split(sep) : [];
+  const seen = new Set(parts);
+  const prepend = extras.filter((p) => !seen.has(p));
+  return [...prepend, ...parts].join(sep);
+}
+
+/** Result of resolving the Docker CLI binary location. */
+export type DockerBinaryResolution =
+  | { found: true; path: string; via: "PATH" | "absolute" }
+  | { found: false; attempted: string[] };
+
+/**
+ * Probe for a working Docker CLI. Tries the bare `docker` (or `docker.exe`)
+ * command under the augmented PATH first; falls back to absolute candidates
+ * from `dockerPathExtras`. A candidate is considered valid only if
+ * `docker --version` exits 0 — file existence alone isn't enough since
+ * permissions could prevent execution.
+ */
+export async function resolveDockerBinary(
+  plat: NodeJS.Platform = platform(),
+): Promise<DockerBinaryResolution> {
+  const extras = dockerPathExtras(plat);
+  const augmented = augmentPath(process.env.PATH ?? "", extras);
+  const env = { ...process.env, PATH: augmented };
+  const attempted: string[] = [];
+
+  const bare = plat === "win32" ? "docker.exe" : "docker";
+  attempted.push(`PATH:${bare}`);
+  try {
+    const res = await spawnCollect(bare, ["--version"], { env });
+    if (res.code === 0) return { found: true, path: bare, via: "PATH" };
+  } catch {
+    // ENOENT — fall through to absolute candidates.
+  }
+
+  const binName = plat === "win32" ? "docker.exe" : "docker";
+  for (const dir of extras) {
+    const candidate = join(dir, binName);
+    attempted.push(candidate);
+    if (!existsSync(candidate)) continue;
+    try {
+      const res = await spawnCollect(candidate, ["--version"], { env });
+      if (res.code === 0) return { found: true, path: candidate, via: "absolute" };
+    } catch {
+      // try next
+    }
+  }
+
+  return { found: false, attempted };
+}
+
+/**
+ * Detect a Linux sandbox that blocks Docker socket access. Returns the
+ * sandbox name if detected, otherwise null. Currently identifies Flatpak
+ * (FLATPAK_ID) and Snap (SNAP).
+ */
+export function detectSandbox(): "flatpak" | "snap" | null {
+  if (platform() !== "linux") return null;
+  if (process.env.FLATPAK_ID !== undefined) return "flatpak";
+  if (process.env.SNAP !== undefined) return "snap";
+  return null;
 }
 
 /**
@@ -194,39 +305,94 @@ export class DockerSupervisor {
   /** Bumped to the actual chosen port after `start()`. */
   private lastPort: number | null = null;
   private lastContainerName: string | null = null;
+  /** Cached binary resolution. `null` means "not yet resolved this session". */
+  private resolution: DockerBinaryResolution | null = null;
+
+  /**
+   * Lazily resolve the Docker CLI. Cached on the instance once a working
+   * binary is found; re-probed on every call while unresolved so a user
+   * who installs Docker mid-session doesn't have to restart Obsidian.
+   */
+  async resolveBinary(): Promise<DockerBinaryResolution> {
+    if (this.resolution?.found === true) return this.resolution;
+    this.resolution = await resolveDockerBinary();
+    return this.resolution;
+  }
+
+  /** Augmented env (with extended PATH) for every docker spawn. */
+  private dockerEnv(): NodeJS.ProcessEnv {
+    return {
+      ...process.env,
+      PATH: augmentPath(process.env.PATH ?? "", dockerPathExtras()),
+    };
+  }
+
+  /**
+   * Run `docker <args>`. Uses the resolved binary path so we don't rely on
+   * the caller's PATH containing Docker. Throws on spawn failure
+   * (e.g. ENOENT after resolution returned a stale path); resolves with
+   * the SpawnResult otherwise (including nonzero exit codes).
+   */
+  async runDocker(
+    args: string[],
+    opts: SpawnOptions = {},
+    onStdoutLine?: (line: string) => void,
+  ): Promise<SpawnResult> {
+    const res = await this.resolveBinary();
+    const cmd = res.found ? res.path : (platform() === "win32" ? "docker.exe" : "docker");
+    return spawnCollect(
+      cmd,
+      args,
+      { env: this.dockerEnv(), ...opts },
+      onStdoutLine,
+    );
+  }
 
   /**
    * Probe the Docker installation. Distinguishes:
-   *   - binary missing      → { ok: false, reason: "not-installed" }
-   *   - daemon not running  → { ok: false, reason: "daemon-down" }
-   *   - healthy             → { ok: true }
+   *   - binary missing       → { ok: false, reason: "not-installed", attempted }
+   *   - sandboxed Obsidian   → { ok: false, reason: "sandboxed" }
+   *   - daemon not running   → { ok: false, reason: "daemon-down" }
+   *   - permission denied    → { ok: false, reason: "permission-denied" } (Linux)
+   *   - healthy              → { ok: true }
    */
   async check(): Promise<DockerCheckResult> {
-    try {
-      const versionRes = await spawnCollect("docker", ["--version"]);
-      if (versionRes.code !== 0) {
-        return {
-          ok: false,
-          reason: "not-installed",
-          detail: versionRes.stderr.trim() || "docker --version exited nonzero",
-        };
-      }
-    } catch (err) {
-      // ENOENT — binary not on PATH.
+    // Pre-check: Flatpak/Snap sandbox cannot reach the docker socket no
+    // matter what `docker` says. Surface a distinct error before spawn so
+    // the user gets actionable copy instead of a confusing "daemon-down".
+    const sandbox = detectSandbox();
+    if (sandbox !== null) {
+      return {
+        ok: false,
+        reason: "sandboxed",
+        detail: `Detected ${sandbox} sandbox env (${sandbox === "flatpak" ? "FLATPAK_ID" : "SNAP"} is set).`,
+      };
+    }
+
+    const bin = await this.resolveBinary();
+    if (!bin.found) {
       return {
         ok: false,
         reason: "not-installed",
-        detail: err instanceof Error ? err.message : String(err),
+        attempted: bin.attempted,
+        detail: `Tried ${bin.attempted.length} candidate path(s); none responded to 'docker --version'.`,
       };
     }
 
     try {
-      const infoRes = await spawnCollect("docker", ["info"]);
+      const infoRes = await this.runDocker(["info"]);
       if (infoRes.code !== 0) {
+        const stderr = infoRes.stderr.trim();
+        if (
+          platform() === "linux" &&
+          /permission denied|dial unix.*permission denied/i.test(stderr)
+        ) {
+          return { ok: false, reason: "permission-denied", detail: stderr };
+        }
         return {
           ok: false,
           reason: "daemon-down",
-          detail: infoRes.stderr.trim() || "docker info exited nonzero",
+          detail: stderr || "docker info exited nonzero",
         };
       }
     } catch (err) {
@@ -249,12 +415,38 @@ export class DockerSupervisor {
    * locally, since v1 ships without a published registry image.
    */
   async pull(imageTag: string, onProgress?: PullProgress): Promise<void> {
-    const inspect = await spawnCollect("docker", ["image", "inspect", imageTag]);
+    // First: exact-tag inspect. Cheap, matches the common case (image tagged
+    // exactly as the setting reads).
+    const inspect = await this.runDocker(["image", "inspect", imageTag]);
     if (inspect.code === 0) {
       onProgress?.(`Using local image ${imageTag}`);
       return;
     }
-    const res = await spawnCollect("docker", ["pull", imageTag], {}, onProgress);
+    // Second: broaden the local search. `docker image inspect feynman-server`
+    // implicitly looks for `feynman-server:latest`; if the user built the
+    // image with a different tag (e.g. `feynman-server:dev`) the inspect
+    // misses it. `docker images --filter reference=<tag>` matches any tag
+    // under that repository name, which lets us reuse a locally-built image
+    // even when the tag doesn't match exactly.
+    const list = await this.runDocker([
+      "images",
+      "--filter",
+      `reference=${imageTag}`,
+      "--format",
+      "{{.Repository}}:{{.Tag}}",
+    ]);
+    if (list.code === 0) {
+      const first = list.stdout
+        .split("\n")
+        .map((l) => l.trim())
+        .find((l) => l.length > 0 && l !== "<none>:<none>");
+      if (first !== undefined) {
+        onProgress?.(`Using local image ${first}`);
+        return;
+      }
+    }
+    // Third: actually try to pull from a registry.
+    const res = await this.runDocker(["pull", imageTag], {}, onProgress);
     if (res.code !== 0) {
       const stderr = res.stderr.trim() || res.stdout.trim();
       throw new Error(
@@ -298,7 +490,7 @@ export class DockerSupervisor {
 
     // 2. Force-remove any stale container with the same name. Tolerate
     // the no-such-container error (exit 1 with "No such container").
-    await spawnCollect("docker", ["rm", "-f", containerName]);
+    await this.runDocker(["rm", "-f", containerName]);
 
     // 3. Port selection.
     const desired = prefs.hostPort > 0 ? prefs.hostPort : 7777;
@@ -327,7 +519,7 @@ export class DockerSupervisor {
     }
     args.push(prefs.imageTag);
 
-    const res = await spawnCollect("docker", args);
+    const res = await this.runDocker(args);
     if (res.code !== 0) {
       throw new Error(
         `docker run failed (exit ${res.code ?? "?"}): ${
@@ -347,8 +539,8 @@ export class DockerSupervisor {
    */
   async stop(containerName?: string): Promise<void> {
     const name = containerName ?? this.lastContainerName ?? DEFAULT_CONTAINER_NAME;
-    await spawnCollect("docker", ["stop", name]);
-    await spawnCollect("docker", ["rm", name]);
+    await this.runDocker(["stop", name]);
+    await this.runDocker(["rm", name]);
   }
 
   /**
@@ -360,7 +552,7 @@ export class DockerSupervisor {
     const name = containerName ?? this.lastContainerName ?? DEFAULT_CONTAINER_NAME;
     let inspect: SpawnResult;
     try {
-      inspect = await spawnCollect("docker", [
+      inspect = await this.runDocker([
         "inspect",
         "-f",
         "{{.State.Running}}",

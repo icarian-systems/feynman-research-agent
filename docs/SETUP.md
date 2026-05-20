@@ -147,6 +147,29 @@ To verify: `curl -i http://127.0.0.1:7777/v1/health` without the header should r
 
 ## Troubleshooting
 
+### "Set up Docker" does nothing / fails
+
+Open Settings → Feynman → Local Docker → **Diagnose Docker** for a copy-pasteable report. Or run **Feynman: Diagnose Docker** from the command palette. The report includes the inherited PATH, augmented PATH, all candidate Docker binary paths the plugin tried, and the output of `docker --version` / `docker info` / `docker context ls`.
+
+**macOS**
+
+- *Docker Desktop not found:* Obsidian launched from Finder/Dock inherits a stripped PATH that excludes `/usr/local/bin` and `/opt/homebrew/bin`. The plugin auto-prepends those plus `/Applications/Docker.app/Contents/Resources/bin` to the spawn PATH; if it still can't find Docker, install Docker Desktop from docker.com and **quit and relaunch Obsidian** so the new PATH is picked up.
+- *Docker Desktop not running:* start Docker Desktop from Applications and try again.
+
+**Windows**
+
+- *Docker Desktop not found:* install from docker.com and reboot (or sign out and back in) to refresh the system PATH.
+- *Docker Desktop not running:* start it from the Start menu and wait for the whale icon to settle.
+
+**Linux**
+
+- *`docker` CLI not found:* install via your package manager — e.g. `sudo apt install docker.io`.
+- *Daemon not running:* `sudo systemctl start docker`.
+- *Permission denied on the socket:* you're not in the `docker` group. Run `sudo usermod -aG docker $USER`, then log out and back in.
+- *Sandboxed Obsidian (Flatpak/Snap):* the sandbox blocks access to the Docker socket. Install the native `.deb` or `.AppImage` instead.
+
+### Other
+
 - **`npm install` fails with "Unsupported engine".** Update to Node 22 (`nvm use 22`) and retry.
 - **`docker build` fails on `npm ci`.** The Dockerfile needs `package-lock.json` at the workspace root. Run `npm install` once in step 1 before building.
 - **Plugin loads but no commands appear.** Check Obsidian's developer console (Cmd-Opt-I). Likely a "Feynman server not reachable" Notice — confirm the container is running (`docker ps`) and the port matches the plugin setting.

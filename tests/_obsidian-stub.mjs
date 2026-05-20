@@ -27,6 +27,7 @@ export class PluginSettingTab extends Stub {}
 export class FuzzySuggestModal extends Stub {}
 export class SuggestModal extends Stub {}
 export class MarkdownView extends Stub {}
+export class FileSystemAdapter extends Stub {}
 
 // requestUrl is referenced by waitlist-modal — provide a noop stand-in.
 export function requestUrl() {

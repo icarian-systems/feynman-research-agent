@@ -33,6 +33,8 @@ import {
 import {
   VIEW_TYPE_FEYNMAN_WORKFLOWS,
 } from "../views/workflows-view";
+import { DockerDiagnoseModal } from "../views/docker-diagnose-modal";
+import type { DockerSupervisor } from "../docker/supervisor";
 
 export interface RegisterCommandsDeps {
   client: FeynmanClient;
@@ -45,6 +47,8 @@ export interface RegisterCommandsDeps {
   registry?: ActiveRunRegistry;
   /** Last-Event-ID persistence sink — forwarded to runWorkflow. */
   onLastEventIdAdvance?: (runId: string, eventId: string) => void;
+  /** Docker supervisor — used by the Diagnose Docker command. */
+  supervisor?: DockerSupervisor;
 }
 
 export function registerCommands(
@@ -58,6 +62,7 @@ export function registerCommands(
     getModel,
     registry,
     onLastEventIdAdvance,
+    supervisor,
   } = deps;
 
   // Obsidian prepends the plugin name to every command name in the palette,
@@ -96,6 +101,16 @@ export function registerCommands(
       void openWorkflowsLeaf(plugin);
     },
   });
+
+  if (supervisor !== undefined) {
+    plugin.addCommand({
+      id: "feynman-diagnose-docker",
+      name: "Diagnose Docker",
+      callback: () => {
+        new DockerDiagnoseModal(plugin.app, supervisor).open();
+      },
+    });
+  }
 }
 
 async function openWorkflowsLeaf(plugin: Plugin): Promise<void> {

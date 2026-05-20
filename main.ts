@@ -6,6 +6,7 @@ import { MIN_SERVER_VERSION } from "./src/protocol";
 
 import { FeynmanClient, type EventStream } from "./src/transport/client";
 import { registerCommands } from "./src/commands/register";
+import { DockerSupervisor } from "./src/docker/supervisor";
 import { FeynmanSettingTab, DEFAULT_SETTINGS, type FeynmanSettings } from "./src/settings/settings-tab";
 import { resolveBaseUrl, resolveAuth, backendToVaultMode, openPluginSettings } from "./src/settings/derive";
 import { FeynmanChatView, VIEW_TYPE_FEYNMAN_CHAT } from "./src/views/chat-view";
@@ -27,6 +28,9 @@ export default class FeynmanPlugin extends Plugin {
   serverManifest: ManifestResponse | null = null;
   serverVersionError: string | null = null;
 
+  /** Shared Docker supervisor — settings tab + command palette point here. */
+  readonly supervisor = new DockerSupervisor();
+
   /** Aborted on unload — pass `.signal` into async work to cancel it. */
   readonly abortController = new AbortController();
   /** Live SSE streams keyed by runId. Drained on `onunload`. */
@@ -35,7 +39,11 @@ export default class FeynmanPlugin extends Plugin {
   private readonly lastEventTimers: Map<string, number> = new Map();
 
   override async onload(): Promise<void> {
-    this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
+    // Deep-merge persisted data over defaults so users with older data.json
+    // files don't lose nested defaults (e.g. docker.vaultMountPath added in
+    // a later release) when the persisted blob is missing those keys.
+    const persisted = (await this.loadData()) as Partial<FeynmanSettings> | null;
+    this.settings = mergeSettings(DEFAULT_SETTINGS, persisted ?? {});
 
     this.registerView(VIEW_TYPE_FEYNMAN_CHAT, (leaf: WorkspaceLeaf) => new FeynmanChatView(leaf));
     this.registerView(VIEW_TYPE_FEYNMAN_WORKFLOWS, (leaf: WorkspaceLeaf) =>
@@ -144,7 +152,12 @@ export default class FeynmanPlugin extends Plugin {
 
   /** Build the deps object both `registerCommands` paths use. */
   private buildCommandsDeps(manifest: ManifestResponse | null) {
-    return { ...this.buildRunDeps(), manifest: manifest ?? EMPTY_MANIFEST, registry: this };
+    return {
+      ...this.buildRunDeps(),
+      manifest: manifest ?? EMPTY_MANIFEST,
+      registry: this,
+      supervisor: this.supervisor,
+    };
   }
 
   /** Reconstruct the client and re-fetch /v1/manifest. Re-registers commands
@@ -204,4 +217,37 @@ export default class FeynmanPlugin extends Plugin {
       () => this.refreshWorkflowsPane(),
     );
   }
+}
+
+/**
+ * Deep-merge persisted settings over defaults. Only descends into plain
+ * objects; arrays and primitives are taken from the persisted value when
+ * present, otherwise from defaults. This protects against the
+ * `docker.vaultMountPath = undefined` class of bugs where a newer code
+ * path reads a field that an older data.json never persisted.
+ */
+function mergeSettings(
+  defaults: FeynmanSettings,
+  persisted: Partial<FeynmanSettings>,
+): FeynmanSettings {
+  return deepMerge(defaults, persisted) as FeynmanSettings;
+}
+
+function isPlainObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function deepMerge(a: unknown, b: unknown): unknown {
+  if (!isPlainObject(a) || !isPlainObject(b)) return b === undefined ? a : b;
+  const out: Record<string, unknown> = { ...a };
+  for (const [k, bv] of Object.entries(b)) {
+    if (bv === undefined) continue;
+    const av = a[k];
+    if (isPlainObject(av) && isPlainObject(bv)) {
+      out[k] = deepMerge(av, bv);
+    } else {
+      out[k] = bv;
+    }
+  }
+  return out;
 }
