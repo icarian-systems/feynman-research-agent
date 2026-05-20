@@ -1,0 +1,161 @@
+# Feynman v1 — Infrastructure setup
+
+Operator's guide to running the v1 local-Docker stack: two repos, one Docker container, one Obsidian plugin.
+
+## Prerequisites
+
+- **Node 22** (engines accept 20.19–24). Install via `nvm install 22 && nvm use 22`.
+- **npm 10+** (ships with Node 22).
+- **Docker Desktop** (macOS / Windows) or Docker engine (Linux). Verify with `docker --version`.
+- **Obsidian 1.4.0+** with community plugins enabled (Settings → Community plugins → Turn on).
+- **Anthropic API key.** Optional: Exa, Perplexity, Gemini, OpenAI for search-heavy workflows.
+- ~5 GB free disk for workspace + image.
+
+## Expected repo layout
+
+```
+~/projects/obsidian-plugins/
+├── feynman/              # runtime: CLI + server + skills + prompts (npm workspace)
+└── feynman-obsidian/     # the Obsidian plugin
+```
+
+The plugin's `package.json` references `file:../feynman/packages/protocol` — preserve the sibling relationship or update the path.
+
+## 1. Install the workspace
+
+```bash
+cd ~/projects/obsidian-plugins/feynman
+npm install
+```
+
+Sanity-check:
+
+```bash
+npm run typecheck --workspaces
+npm test
+```
+
+Expect: all 5 packages typecheck (cli, core, extensions, prompts, protocol, server); ≥172 tests pass.
+
+## 2. Build the Docker image
+
+```bash
+cd ~/projects/obsidian-plugins/feynman
+docker build -t feynman/server:dev -f packages/server/Dockerfile .
+```
+
+Build context is the workspace root (the trailing `.`). The two-stage build compiles all TS packages to `dist/` inside the image, then ships a runtime stage with just `node` and `wget` (for HEALTHCHECK).
+
+Verify the image:
+
+```bash
+docker images feynman/server:dev
+# REPOSITORY            TAG   IMAGE ID       CREATED   SIZE
+# feynman/server        dev   ...            ...       ~250MB
+```
+
+## 3. Install the plugin into a test vault
+
+```bash
+cd ~/projects/obsidian-plugins/feynman-obsidian
+npm install
+npm run build   # writes main.js at repo root
+```
+
+Pick or create a test vault, then symlink the plugin in:
+
+```bash
+mkdir -p ~/Documents/feynman-test-vault/.obsidian/plugins
+ln -s ~/projects/obsidian-plugins/feynman-obsidian \
+      ~/Documents/feynman-test-vault/.obsidian/plugins/feynman
+```
+
+Open the vault in Obsidian → Settings → Community plugins → enable **Feynman**.
+
+## 4. Configure the plugin
+
+Open Settings → Feynman:
+
+| Section | Value |
+| --- | --- |
+| Backend | Local Docker |
+| Local Docker → Image tag | `feynman/server:dev` (matches step 2) |
+| Local Docker → Host port | `7777` (or `0` for auto-assign per vault) |
+| Local Docker → Vault mount path | leave blank (defaults to vault root) |
+| Local Docker → API keys | paste your Anthropic key at minimum |
+| Workspace | `Feynman/` (default) |
+| Model | leave blank for v1 (manifest's `models[]` is empty until M5) |
+
+## 5. Start the container
+
+The Docker supervisor (auto-start from settings) is M2.5 work — in v1 you start the container manually:
+
+```bash
+docker run -d --name feynman-server-test \
+  -p 127.0.0.1:7777:7777 \
+  -v "$HOME/Documents/feynman-test-vault:/vault" \
+  -e FEYNMAN_VAULT=/vault \
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  feynman/server:dev
+```
+
+Optional auth (recommended even on loopback):
+
+```bash
+TOKEN=$(openssl rand -hex 16)
+docker run -d --name feynman-server-test \
+  -p 127.0.0.1:7777:7777 \
+  -v "$HOME/Documents/feynman-test-vault:/vault" \
+  -e FEYNMAN_VAULT=/vault \
+  -e ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY" \
+  -e FEYNMAN_AUTH_TOKEN="$TOKEN" \
+  feynman/server:dev
+echo "Token: $TOKEN"
+```
+
+If you use a token, switch the plugin's Backend to **Self-hosted** (base URL `http://127.0.0.1:7777`, paste the token) — Docker mode in v1 doesn't yet plumb a token to the plugin.
+
+Smoke-check:
+
+```bash
+curl -s http://127.0.0.1:7777/v1/health
+# {"ok":true,"version":"0.0.0"}
+```
+
+## 6. Run a workflow
+
+In Obsidian:
+
+- Cmd-P → **Feynman: Server status** → Notice shows health + prompt count.
+- Cmd-P → **Feynman: Open chat** → empty chat pane opens on the right.
+- Cmd-P → **Feynman: Deep research…** → input modal appears; fill the `topic` field; submit; the chat pane streams.
+
+Artifacts land in `~/Documents/feynman-test-vault/Feynman/outputs/`.
+
+## Troubleshooting
+
+- **`npm install` fails with "Unsupported engine".** Update to Node 22 (`nvm use 22`) and retry.
+- **`docker build` fails on `npm ci`.** The Dockerfile needs `package-lock.json` at the workspace root. Run `npm install` once in step 1 before building.
+- **Plugin loads but no commands appear.** Check Obsidian's developer console (Cmd-Opt-I). Likely a "Feynman server not reachable" Notice — confirm the container is running (`docker ps`) and the port matches the plugin setting.
+- **Server returns 401.** Auth token is set on the container but the plugin isn't sending it. Either unset `FEYNMAN_AUTH_TOKEN` on the container, or switch the plugin to Self-hosted mode and paste the same token.
+- **Stream stalls after ~30s.** Some proxies idle-out SSE. v1 sends `:keepalive` every 10s, but a misconfigured intermediary can still drop it. Use `curl -N` against `/v1/runs/<id>/events` to confirm keepalives arrive.
+- **CLI smoke-test `feynman --help` exits with "Unsupported engine".** Host is on Node 25+; the CLI's `preinstall` rejects. Either downgrade Node or invoke via `tsx`: `npx tsx packages/cli/src/index.ts --help`.
+
+## Stopping & cleanup
+
+```bash
+docker stop feynman-server-test && docker rm feynman-server-test
+docker rmi feynman/server:dev          # optional — frees ~250MB
+```
+
+To start fresh: rerun step 5 with a fresh `--name` (per-vault containers use `feynman-server-<vaultId>` once the supervisor lands; v1 manual start uses whatever name you pass).
+
+## What's NOT yet wired (per ARCHITECTURE.md §10)
+
+- **M2.5:** Docker supervisor (auto-pull/start/stop from settings).
+- **M3:** Self-hosted sandbox-mode artifact pull; vault staging (`Feynman/.staging/<runId>/`).
+- **M4:** FS-bridge interactive mode for self-hosted + Modal.
+- **M5:** Managed Modal + Lemon Squeezy.
+- **M6:** Artifact view, model picker, usage meter, polish.
+
+Until M3's staging lands, **disable Obsidian Sync (and similar) on the test vault during long runs** — direct-to-vault writes will produce conflict files. The plugin surfaces a warning when a sync provider is detected.

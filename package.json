@@ -1,0 +1,21 @@
+{
+  "name": "feynman-obsidian",
+  "private": true,
+  "type": "module",
+  "version": "0.0.1",
+  "description": "Feynman Obsidian plugin (v1). HTTP+SSE client over @feynman/protocol; supports Local Docker, Self-hosted, and Managed Modal backends.",
+  "scripts": {
+    "dev": "node esbuild.config.mjs --watch",
+    "build": "node esbuild.config.mjs --production",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@feynman/protocol": "file:../feynman/packages/protocol"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "esbuild": "latest",
+    "obsidian": "latest",
+    "typescript": "^5.5.0"
+  }
+}

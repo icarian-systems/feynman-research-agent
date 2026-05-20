@@ -1,0 +1,718 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Feynman — Plugin Pane Mockup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,400;0,500;1,400&display=swap"
+    />
+    <style>
+      /* =====================================================================
+       *  Feynman — Obsidian right-leaf pane mockup.
+       *  Left = Obsidian's native file explorer. Middle = the user's note in
+       *  reading view. Right (only thing Feynman ships) = a list of workflow
+       *  buttons; clicking one expands its prompt form inline below it.
+       * =================================================================== */
+
+      :root {
+        --background-primary:        #fbfaf7;
+        --background-primary-alt:    #f4f3ef;
+        --background-secondary:      #f0eee9;
+        --background-secondary-alt:  #e7e5df;
+        --background-modifier-border: #dfdcd5;
+        --background-modifier-hover: rgba(0, 0, 0, 0.035);
+        --background-modifier-active: rgba(138, 112, 65, 0.06);
+
+        --text-normal:               #232220;
+        --text-muted:                #6a685f;
+        --text-faint:                #a8a59c;
+        --text-on-accent:            #fbfaf7;
+
+        --interactive-accent:        #8a7041;
+        --interactive-accent-hover:  #705930;
+        --color-success:             #5d6f3d;
+
+        --font-text:      "Spectral", Charter, "Iowan Old Style", Georgia, serif;
+        --font-interface: -apple-system, BlinkMacSystemFont, "Helvetica Neue",
+                          system-ui, sans-serif;
+        --font-monospace: ui-monospace, "JetBrains Mono", "SF Mono", Menlo, monospace;
+      }
+
+      [data-theme="dark"] {
+        --background-primary:        #1b1a17;
+        --background-primary-alt:    #1f1e1b;
+        --background-secondary:      #232220;
+        --background-secondary-alt:  #2b2a26;
+        --background-modifier-border: #34332f;
+        --background-modifier-hover: rgba(255, 255, 255, 0.04);
+        --background-modifier-active: rgba(181, 154, 106, 0.08);
+
+        --text-normal:               #d9d6cf;
+        --text-muted:                #9c988e;
+        --text-faint:                #6a6760;
+        --text-on-accent:            #1b1a17;
+
+        --interactive-accent:        #b59a6a;
+        --interactive-accent-hover:  #cdb37e;
+        --color-success:             #93a86c;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--background-secondary);
+        color: var(--text-normal);
+        font-family: var(--font-interface);
+        font-size: 14px;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      .meta {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 20px 24px 6px;
+        display: flex;
+        align-items: baseline;
+        gap: 18px;
+        font-size: 11px;
+        color: var(--text-faint);
+      }
+      .meta strong { color: var(--text-muted); font-weight: 500; }
+      .meta-spacer { flex: 1; }
+      .theme-toggle {
+        background: transparent;
+        border: 1px solid var(--background-modifier-border);
+        color: var(--text-muted);
+        font: inherit;
+        font-size: 11px;
+        padding: 4px 10px;
+        border-radius: 3px;
+        cursor: pointer;
+      }
+      .theme-toggle:hover {
+        border-color: var(--interactive-accent);
+        color: var(--interactive-accent);
+      }
+
+      /* ---- Obsidian frame ---------------------------------------------- */
+
+      .obsidian-frame {
+        max-width: 1280px;
+        margin: 12px auto 60px;
+        background: var(--background-primary);
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 6px;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: 220px 1fr 320px;
+        min-height: 760px;
+        box-shadow: 0 16px 40px -24px rgba(0, 0, 0, 0.18);
+      }
+
+      .frame-tabs {
+        grid-column: 1 / -1;
+        height: 34px;
+        background: var(--background-secondary);
+        border-bottom: 1px solid var(--background-modifier-border);
+        display: flex;
+        align-items: center;
+        padding: 0 12px;
+        gap: 8px;
+        font-size: 12px;
+        color: var(--text-faint);
+      }
+      .dot {
+        width: 10px; height: 10px; border-radius: 50%;
+        background: var(--background-modifier-border);
+      }
+      .frame-tabs .tab { margin-left: 8px; color: var(--text-muted); }
+      .frame-tabs .tab.active { color: var(--text-normal); }
+
+      /* =================================================================
+       *  LEFT — Obsidian file explorer (native-looking)
+       * ================================================================ */
+
+      .file-explorer {
+        background: var(--background-secondary);
+        border-right: 1px solid var(--background-modifier-border);
+        font-size: 13px;
+        color: var(--text-muted);
+        overflow: auto;
+      }
+      .fe-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--background-modifier-border);
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+      }
+      .fe-head .controls {
+        margin-left: auto;
+        color: var(--text-faint);
+        font-size: 13px;
+        letter-spacing: 4px;
+      }
+      .fe-tree {
+        list-style: none;
+        margin: 0;
+        padding: 6px 0;
+      }
+      .fe-tree li {
+        padding: 3px 12px 3px 8px;
+        cursor: default;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--text-muted);
+      }
+      .fe-tree li:hover { background: var(--background-modifier-hover); color: var(--text-normal); }
+      .fe-tree li.folder { font-weight: 500; color: var(--text-normal); }
+      .fe-tree li.file   { color: var(--text-muted); }
+      .fe-tree li.active {
+        background: var(--background-secondary-alt);
+        color: var(--text-normal);
+      }
+      .fe-glyph {
+        display: inline-block;
+        width: 12px;
+        text-align: center;
+        font-size: 9px;
+        color: var(--text-faint);
+      }
+      .fe-indent-1 { padding-left: 22px; }
+      .fe-indent-2 { padding-left: 36px; }
+
+      /* =================================================================
+       *  MIDDLE — markdown file in reading view
+       * ================================================================ */
+
+      .editor-pane {
+        background: var(--background-primary);
+        padding: 40px 56px 60px;
+        overflow: auto;
+        font-family: var(--font-text);
+        color: var(--text-normal);
+      }
+      .editor-title {
+        font-family: var(--font-text);
+        font-size: 30px;
+        font-weight: 500;
+        margin: 0 0 4px;
+        letter-spacing: -0.005em;
+      }
+      .editor-meta {
+        font-family: var(--font-interface);
+        font-size: 11px;
+        color: var(--text-faint);
+        margin-bottom: 26px;
+        letter-spacing: 0.02em;
+      }
+      .editor-body {
+        max-width: 640px;
+      }
+      .editor-body h2 {
+        font-family: var(--font-text);
+        font-size: 18px;
+        font-weight: 500;
+        margin: 24px 0 10px;
+        color: var(--text-normal);
+      }
+      .editor-body p {
+        font-size: 15.5px;
+        line-height: 1.72;
+        margin: 0 0 0.85em;
+        color: var(--text-normal);
+        font-feature-settings: "kern", "liga", "onum";
+      }
+      .editor-body p.muted { color: var(--text-muted); }
+      .editor-body em { font-style: italic; color: var(--text-muted); }
+      .editor-body .highlight {
+        background: rgba(138, 112, 65, 0.13);
+        padding: 0 2px;
+      }
+      [data-theme="dark"] .editor-body .highlight {
+        background: rgba(181, 154, 106, 0.18);
+      }
+      .editor-body blockquote {
+        border-left: 2px solid var(--background-modifier-border);
+        margin: 14px 0;
+        padding: 2px 0 2px 14px;
+        color: var(--text-muted);
+        font-size: 15px;
+      }
+      .editor-body ul {
+        font-size: 15px;
+        line-height: 1.7;
+        color: var(--text-normal);
+        padding-left: 22px;
+        margin: 6px 0 14px;
+      }
+      .editor-body ul li { margin-bottom: 4px; }
+
+      /* =================================================================
+       *  RIGHT — the Feynman pane (the only thing the plugin ships)
+       * ================================================================ */
+
+      .feynman-pane {
+        background: var(--background-primary);
+        border-left: 1px solid var(--background-modifier-border);
+        display: flex;
+        flex-direction: column;
+        overflow: auto;
+      }
+
+      .pane-head {
+        padding: 14px 16px 12px;
+        border-bottom: 1px solid var(--background-modifier-border);
+      }
+      .pane-head .label {
+        font-size: 11.5px;
+        font-weight: 500;
+        color: var(--text-normal);
+        letter-spacing: 0.02em;
+      }
+      .pane-head .status {
+        margin-top: 4px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-family: var(--font-monospace);
+        font-size: 10.5px;
+        color: var(--text-faint);
+      }
+      .status-dot {
+        width: 6px; height: 6px; border-radius: 50%;
+        background: var(--color-success);
+        display: inline-block;
+      }
+
+      .pane-body {
+        padding: 12px 14px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+
+      /* ---- Workflow button -------------------------------------------- */
+
+      .wf {
+        display: flex;
+        flex-direction: column;
+      }
+      .wf-btn {
+        background: transparent;
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 4px;
+        padding: 9px 12px;
+        font-family: var(--font-interface);
+        text-align: left;
+        cursor: pointer;
+        color: var(--text-normal);
+        transition: border-color 0.12s ease, background 0.12s ease;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .wf-btn:hover {
+        border-color: var(--text-faint);
+        background: var(--background-modifier-hover);
+      }
+      .wf-btn .slash {
+        font-family: var(--font-monospace);
+        font-size: 11.5px;
+        color: var(--text-faint);
+      }
+      .wf-btn .title {
+        font-size: 13.5px;
+        color: var(--text-normal);
+      }
+      .wf-btn .arrow {
+        margin-left: auto;
+        font-size: 11px;
+        color: var(--text-faint);
+      }
+
+      .wf.expanded .wf-btn {
+        border-color: var(--interactive-accent);
+        background: var(--background-modifier-active);
+      }
+      .wf.expanded .wf-btn .slash { color: var(--interactive-accent); }
+      .wf.expanded .wf-btn .arrow { transform: rotate(90deg); color: var(--interactive-accent); }
+      .wf-btn .arrow { transition: transform 0.15s ease; display: inline-block; }
+
+      /* ---- Inline prompt form ----------------------------------------- */
+
+      .wf-prompt {
+        margin-top: 8px;
+        margin-bottom: 4px;
+        padding: 12px 14px;
+        background: var(--background-primary-alt);
+        border: 1px solid var(--background-modifier-border);
+        border-left: 2px solid var(--interactive-accent);
+        border-radius: 0 4px 4px 0;
+        display: none;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .wf.expanded .wf-prompt { display: flex; }
+
+      .wf-prompt .desc {
+        font-size: 12.5px;
+        line-height: 1.55;
+        color: var(--text-muted);
+      }
+      .wf-prompt .ctx {
+        font-family: var(--font-monospace);
+        font-size: 10.5px;
+        color: var(--text-faint);
+        letter-spacing: 0.02em;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .wf-prompt .ctx strong {
+        color: var(--text-muted);
+        font-weight: 500;
+      }
+
+      .field {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .field label {
+        font-size: 10.5px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--text-faint);
+      }
+      .field input[type="text"],
+      .field textarea,
+      .field select {
+        font-family: var(--font-interface);
+        font-size: 13px;
+        color: var(--text-normal);
+        background: var(--background-primary);
+        border: 1px solid var(--background-modifier-border);
+        border-radius: 3px;
+        padding: 6px 8px;
+        outline: none;
+      }
+      .field input[type="text"]:focus,
+      .field textarea:focus,
+      .field select:focus {
+        border-color: var(--interactive-accent);
+      }
+      .field textarea {
+        resize: vertical;
+        min-height: 48px;
+        line-height: 1.5;
+      }
+
+      .wf-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 2px;
+      }
+      .wf-actions .spacer { flex: 1; }
+      .wf-actions button {
+        font-family: var(--font-interface);
+        font-size: 11.5px;
+        padding: 6px 12px;
+        border-radius: 3px;
+        cursor: pointer;
+        border: 1px solid var(--background-modifier-border);
+        background: transparent;
+        color: var(--text-muted);
+      }
+      .wf-actions button:hover { color: var(--text-normal); border-color: var(--text-faint); }
+      .wf-actions button.primary {
+        background: var(--interactive-accent);
+        color: var(--text-on-accent);
+        border-color: var(--interactive-accent);
+      }
+      .wf-actions button.primary:hover {
+        background: var(--interactive-accent-hover);
+        border-color: var(--interactive-accent-hover);
+      }
+
+      /* ---- Footer ----------------------------------------------------- */
+
+      .pane-foot {
+        margin-top: auto;
+        padding: 10px 14px;
+        border-top: 1px solid var(--background-modifier-border);
+        font-family: var(--font-monospace);
+        font-size: 10.5px;
+        color: var(--text-faint);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .footnotes {
+        max-width: 1280px;
+        margin: 0 auto 50px;
+        padding: 0 24px;
+        font-size: 11px;
+        color: var(--text-faint);
+      }
+      .footnotes code { font-family: var(--font-monospace); }
+
+      @media (max-width: 1040px) {
+        .obsidian-frame { grid-template-columns: 1fr 320px; }
+        .file-explorer { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="meta">
+      <strong>Feynman</strong>
+      <span>plugin pane · right-leaf only</span>
+      <span class="meta-spacer"></span>
+      <button class="theme-toggle" id="theme-toggle" type="button">
+        toggle theme
+      </button>
+    </header>
+
+    <main class="obsidian-frame">
+      <div class="frame-tabs">
+        <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+        <span class="tab">attention-is-all-you-need.md</span>
+      </div>
+
+      <!-- =============================================================
+           Left — Obsidian's native file explorer
+           ============================================================ -->
+      <aside class="file-explorer">
+        <div class="fe-head">
+          research-vault
+          <span class="controls">⋯</span>
+        </div>
+        <ul class="fe-tree">
+          <li class="folder"><span class="fe-glyph">▾</span> Papers</li>
+          <li class="file active fe-indent-1"><span class="fe-glyph">·</span> attention-is-all-you-need.md</li>
+          <li class="file fe-indent-1"><span class="fe-glyph">·</span> rethinking-attention.md</li>
+          <li class="file fe-indent-1"><span class="fe-glyph">·</span> flash-attention.md</li>
+          <li class="file fe-indent-1"><span class="fe-glyph">·</span> roformer-rope.md</li>
+
+          <li class="folder"><span class="fe-glyph">▾</span> Notes</li>
+          <li class="file fe-indent-1"><span class="fe-glyph">·</span> reading-list.md</li>
+          <li class="file fe-indent-1"><span class="fe-glyph">·</span> week-23.md</li>
+          <li class="file fe-indent-1"><span class="fe-glyph">·</span> ideas.md</li>
+
+          <li class="folder"><span class="fe-glyph">▾</span> Feynman</li>
+          <li class="folder fe-indent-1"><span class="fe-glyph">▸</span> outputs</li>
+          <li class="folder fe-indent-1"><span class="fe-glyph">▸</span> notes</li>
+          <li class="folder fe-indent-1"><span class="fe-glyph">▸</span> papers</li>
+        </ul>
+      </aside>
+
+      <!-- =============================================================
+           Middle — the user's markdown file
+           ============================================================ -->
+      <section class="editor-pane">
+        <h1 class="editor-title">Attention is all you need — reading notes</h1>
+        <div class="editor-meta">Papers/attention-is-all-you-need.md · 2 hours ago</div>
+        <div class="editor-body">
+          <p>
+            Vaswani et&nbsp;al.'s central claim is that <em>attention is
+            sufficient</em> for sequence modelling at scale, replacing recurrence
+            entirely. The framing emphasizes parallelism and long-range
+            dependency capture, but the authors treat positional encoding as a
+            solved problem when it arguably is not.
+          </p>
+
+          <h2>What I want to push back on</h2>
+
+          <p>
+            <span class="highlight">The cited 2017 parameter comparison with
+            LSTM baselines is misleading — the embedding table is excluded from
+            the LSTM count, which inflates the apparent efficiency of the
+            Transformer by ~30%.</span>
+            This is the load-bearing claim in §3.3, and the supplementary
+            material does not address it.
+          </p>
+
+          <p class="muted">
+            Three follow-up critiques have aged well: locality bias (resolved by
+            RoPE / ALiBi), quadratic attention cost (mostly resolved by
+            FlashAttention), and training stability at depth (resolved by
+            pre-norm). One has not: the parameter-count argument.
+          </p>
+
+          <h2>Cited critiques worth checking</h2>
+
+          <ul>
+            <li>Mihaylov &amp; Frank (2018) — locality in self-attention</li>
+            <li>Wang et&nbsp;al. (2020) — efficiency comparisons revisited</li>
+            <li>Press et&nbsp;al. (2022) — ALiBi as a locality fix</li>
+          </ul>
+
+          <blockquote>
+            Selection: the highlighted sentence above. <em>/review will pick this
+            up as <code style="font-family: var(--font-monospace);">context.selection</code>
+            when invoked.</em>
+          </blockquote>
+        </div>
+      </section>
+
+      <!-- =============================================================
+           Right — the Feynman pane (the only thing the plugin ships)
+           ============================================================ -->
+      <aside class="feynman-pane">
+        <div class="pane-head">
+          <div class="label">Feynman</div>
+          <div class="status">
+            <span class="status-dot"></span>
+            <span>server · docker · 7777</span>
+          </div>
+        </div>
+
+        <div class="pane-body">
+
+          <!-- /deepresearch -->
+          <div class="wf">
+            <button class="wf-btn" type="button">
+              <span class="slash">/deepresearch</span>
+              <span class="title">Deep research</span>
+              <span class="arrow">›</span>
+            </button>
+          </div>
+
+          <!-- /lit -->
+          <div class="wf">
+            <button class="wf-btn" type="button">
+              <span class="slash">/lit</span>
+              <span class="title">Literature review</span>
+              <span class="arrow">›</span>
+            </button>
+          </div>
+
+          <!-- /audit -->
+          <div class="wf">
+            <button class="wf-btn" type="button">
+              <span class="slash">/audit</span>
+              <span class="title">Audit</span>
+              <span class="arrow">›</span>
+            </button>
+          </div>
+
+          <!-- /recipe -->
+          <div class="wf">
+            <button class="wf-btn" type="button">
+              <span class="slash">/recipe</span>
+              <span class="title">Recipe</span>
+              <span class="arrow">›</span>
+            </button>
+          </div>
+
+          <!-- /review — expanded -->
+          <div class="wf expanded">
+            <button class="wf-btn" type="button">
+              <span class="slash">/review</span>
+              <span class="title">Review this paper</span>
+              <span class="arrow">›</span>
+            </button>
+
+            <div class="wf-prompt">
+              <div class="desc">
+                Critique the active note's argument using the selection as
+                the focal claim.
+              </div>
+
+              <div class="ctx">
+                <span>uses</span>
+                <strong>activeFile</strong>
+                <span>·</span>
+                <strong>selection</strong>
+              </div>
+
+              <div class="field">
+                <label for="r-focus">Focus</label>
+                <input id="r-focus" type="text"
+                       value="cited critiques and the parameter-count claim" />
+              </div>
+
+              <div class="field">
+                <label for="r-tone">Tone</label>
+                <select id="r-tone">
+                  <option>Constructive · adversarial</option>
+                  <option>Generous</option>
+                  <option>Brutal</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="r-notes">Extra notes (optional)</label>
+                <textarea id="r-notes"
+                  placeholder="Anything the agent should know upfront…"></textarea>
+              </div>
+
+              <div class="wf-actions">
+                <span class="spacer"></span>
+                <button type="button">Cancel</button>
+                <button type="button" class="primary">Run /review</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- /draft -->
+          <div class="wf">
+            <button class="wf-btn" type="button">
+              <span class="slash">/draft</span>
+              <span class="title">Draft</span>
+              <span class="arrow">›</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="pane-foot">
+          <span class="status-dot"></span>
+          <span>6 workflows · 22 skills</span>
+        </div>
+      </aside>
+    </main>
+
+    <p class="footnotes">
+      Right-leaf only — Feynman ships a single <code>ItemView</code>. Buttons
+      collapse / expand inline; each expanded prompt drives a
+      <code>POST&nbsp;/v1/run</code> with the manifest's declared
+      <code>context</code> tokens captured from the active editor. The left
+      pane is Obsidian's native file explorer; the centre is the user's note.
+    </p>
+
+    <script>
+      // Theme toggle.
+      const toggle = document.getElementById("theme-toggle");
+      toggle.addEventListener("click", () => {
+        const root = document.documentElement;
+        root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      });
+
+      // Click any workflow header to expand/collapse it. Only one at a time.
+      const wfs = document.querySelectorAll(".wf");
+      wfs.forEach((wf) => {
+        const btn = wf.querySelector(".wf-btn");
+        if (!btn) return;
+        btn.addEventListener("click", () => {
+          const wasOpen = wf.classList.contains("expanded");
+          wfs.forEach((w) => w.classList.remove("expanded"));
+          if (!wasOpen) wf.classList.add("expanded");
+        });
+      });
+    </script>
+  </body>
+</html>

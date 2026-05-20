@@ -1,0 +1,1 @@
+Feynman is an Obsidian plugin that runs the Feynman research agent inside your vault. It is a thin HTTP+SSE client over `@feynman/protocol`, talking to a `@feynman/server` instance running in Local Docker, self-hosted, or Managed Modal mode. For the full design and rationale see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).

@@ -1,0 +1,948 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Feynman — Chat View Mockup</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,500;0,600;1,400;1,500&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
+    <style>
+      /* =====================================================================
+       *  Feynman chat view — design mockup
+       *  Aesthetic: lab notebook in a research library.
+       *  Body voice in Spectral (Google Fonts), tool calls in JetBrains Mono,
+       *  chrome in system-ui. Single saffron accent (#a06330). Warm cream
+       *  paper in light, deep ink in dark. No gradients, no purple, no slop.
+       * =================================================================== */
+
+      :root {
+        --paper:        #f5ede0;
+        --paper-rule:   #e3d6bc;
+        --ink:          #1d1a14;
+        --ink-soft:     #3c372e;
+        --ink-faint:    #6b6356;
+        --ink-whisper:  #a39a89;
+        --accent:       #a06330;
+        --accent-soft:  #d9b285;
+        --error:        #8a2f24;
+        --success:      #4a6431;
+        --chrome:       #ebe0c8;
+        --chrome-edge:  #d6c8a8;
+        --modal-veil:   rgba(29, 26, 20, 0.42);
+
+        --serif:  "Spectral", "Charter", "Iowan Old Style", Georgia, serif;
+        --mono:   "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+        --sans:   -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui,
+                  sans-serif;
+      }
+
+      [data-theme="dark"] {
+        --paper:        #1c1a16;
+        --paper-rule:   #2e2a23;
+        --ink:          #ece2cf;
+        --ink-soft:     #c8bda7;
+        --ink-faint:    #908675;
+        --ink-whisper:  #5f5746;
+        --accent:       #d9a86b;
+        --accent-soft:  #6a4220;
+        --error:        #d77160;
+        --success:      #9bb87d;
+        --chrome:       #15130f;
+        --chrome-edge:  #2a2620;
+        --modal-veil:   rgba(0, 0, 0, 0.6);
+      }
+
+      /* ---- Page frame ---------------------------------------------------- */
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: var(--chrome);
+        color: var(--ink);
+        font-family: var(--sans);
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        font-feature-settings: "kern", "liga", "tnum";
+      }
+
+      body {
+        min-height: 100vh;
+        background-image:
+          radial-gradient(at top left,  rgba(160, 99, 48, 0.04), transparent 40%),
+          radial-gradient(at bottom right, rgba(74, 100, 49, 0.03), transparent 40%);
+        background-attachment: fixed;
+      }
+
+      .meta {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 22px 28px 4px;
+        display: flex;
+        align-items: baseline;
+        gap: 22px;
+        font-size: 11px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--ink-faint);
+      }
+      .meta strong {
+        color: var(--ink);
+        font-weight: 500;
+        letter-spacing: 0.08em;
+      }
+      .meta-spacer { flex: 1; }
+      .theme-toggle {
+        background: transparent;
+        border: 1px solid var(--chrome-edge);
+        color: var(--ink-soft);
+        font: inherit;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+        padding: 5px 10px;
+        border-radius: 1px;
+        cursor: pointer;
+      }
+      .theme-toggle:hover {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      /* ---- Obsidian-ish frame ------------------------------------------- */
+
+      .obsidian-frame {
+        max-width: 1100px;
+        margin: 14px auto 60px;
+        background: var(--paper);
+        border: 1px solid var(--chrome-edge);
+        border-radius: 6px;
+        overflow: hidden;
+        display: grid;
+        grid-template-columns: 220px 1fr;
+        min-height: 720px;
+        box-shadow: 0 30px 60px -30px rgba(29, 26, 20, 0.25);
+      }
+
+      .frame-tabs {
+        grid-column: 1 / -1;
+        height: 38px;
+        background: var(--chrome);
+        border-bottom: 1px solid var(--chrome-edge);
+        display: flex;
+        align-items: center;
+        padding: 0 14px;
+        gap: 10px;
+      }
+      .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--chrome-edge); }
+      .dot:nth-child(2) { background: #d6c8a8; }
+      .dot:nth-child(3) { background: #c4b899; }
+      .frame-tabs .tab {
+        margin-left: 14px;
+        font-size: 12px;
+        color: var(--ink-faint);
+        letter-spacing: 0.02em;
+      }
+      .frame-tabs .tab.active {
+        color: var(--ink);
+        border-bottom: 2px solid var(--accent);
+        padding-bottom: 8px;
+        margin-bottom: -10px;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--paper-rule);
+        background: var(--paper);
+        padding: 18px 14px;
+        font-size: 12px;
+        color: var(--ink-faint);
+      }
+      .sidebar h3 {
+        font-family: var(--sans);
+        font-size: 10px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--ink-whisper);
+        margin: 18px 0 8px;
+        font-weight: 500;
+      }
+      .sidebar ul { list-style: none; margin: 0; padding: 0; }
+      .sidebar li {
+        padding: 4px 0;
+        color: var(--ink-soft);
+      }
+      .sidebar li.active {
+        color: var(--accent);
+        font-weight: 500;
+      }
+      .sidebar li .glyph {
+        display: inline-block;
+        width: 14px;
+        color: var(--ink-whisper);
+      }
+
+      /* ---- Chat pane ---------------------------------------------------- */
+
+      .chat-pane {
+        background: var(--paper);
+        position: relative;
+        padding: 0 0 60px;
+      }
+
+      .feynman-chat-view {
+        max-width: 660px;
+        margin: 0 auto;
+        padding: 36px 32px 0;
+        font-family: var(--serif);
+        color: var(--ink);
+      }
+
+      .header {
+        display: grid;
+        grid-template-columns: auto 1fr auto;
+        align-items: end;
+        gap: 18px;
+        padding-bottom: 22px;
+        border-bottom: 1px solid var(--paper-rule);
+      }
+      .header .mark {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .wordmark {
+        font-family: var(--serif);
+        font-size: 28px;
+        font-weight: 500;
+        font-feature-settings: "lnum", "kern";
+        letter-spacing: -0.012em;
+        color: var(--ink);
+        line-height: 1;
+      }
+      .wordmark em {
+        font-style: italic;
+        color: var(--accent);
+        font-weight: 400;
+      }
+      .tagline {
+        font-family: var(--sans);
+        font-size: 10.5px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        color: var(--ink-whisper);
+      }
+      .diagram {
+        display: block;
+        height: 32px;
+        width: auto;
+        color: var(--ink-faint);
+        opacity: 0.9;
+      }
+      .header-pills {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-end;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-faint);
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .pill .dot-status {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--success);
+      }
+      .pill .dot-status.live { background: var(--accent); animation: pulse 2.2s ease-in-out infinite; }
+      .run-id { color: var(--ink-whisper); }
+
+      @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50%      { opacity: 0.35; }
+      }
+
+      /* ---- Conversation log -------------------------------------------- */
+
+      .feynman-chat-log {
+        padding-top: 28px;
+        display: flex;
+        flex-direction: column;
+        gap: 32px;
+      }
+
+      .invocation {
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+        padding-bottom: 4px;
+      }
+      .invocation .slash {
+        font-family: var(--mono);
+        font-size: 14px;
+        color: var(--accent);
+      }
+      .invocation .args {
+        font-family: var(--serif);
+        font-style: italic;
+        font-size: 15px;
+        color: var(--ink-soft);
+      }
+      .invocation .args::before { content: "“"; opacity: 0.6; }
+      .invocation .args::after  { content: "”"; opacity: 0.6; }
+
+      /* numbered marginalia */
+      .feynman-message,
+      .feynman-thinking,
+      .feynman-tool-call,
+      .feynman-question,
+      .feynman-artifact,
+      .feynman-callout {
+        position: relative;
+        padding-left: 44px;
+      }
+      .feynman-message::before,
+      .feynman-thinking::before,
+      .feynman-tool-call::before,
+      .feynman-question::before,
+      .feynman-artifact::before,
+      .feynman-callout::before {
+        position: absolute;
+        left: 0;
+        top: 3px;
+        font-family: var(--mono);
+        font-size: 11px;
+        font-feature-settings: "tnum";
+        letter-spacing: 0.02em;
+        color: var(--ink-whisper);
+        width: 28px;
+        text-align: right;
+      }
+
+      /* role / phase label, top of each block */
+      .feynman-message-role {
+        font-family: var(--sans);
+        font-size: 10px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--ink-whisper);
+        margin-bottom: 8px;
+        display: block;
+      }
+
+      /* ---- Thinking trace ---------------------------------------------- */
+
+      .feynman-thinking { font-family: var(--serif); }
+      .feynman-thinking::before { content: "01"; }
+      .feynman-thinking-body {
+        font-style: italic;
+        color: var(--ink-faint);
+        font-size: 15px;
+        line-height: 1.65;
+        border-left: 2px solid var(--paper-rule);
+        padding-left: 14px;
+        margin: 6px 0;
+      }
+      .feynman-thinking-body .cursor {
+        display: inline-block;
+        width: 7px;
+        height: 14px;
+        background: var(--accent);
+        vertical-align: -2px;
+        margin-left: 2px;
+        animation: blink 1s steps(2, end) infinite;
+      }
+      @keyframes blink { 50% { opacity: 0; } }
+
+      /* ---- Agent message ----------------------------------------------- */
+
+      .feynman-message::before { content: "02"; }
+      .feynman-message-body {
+        font-family: var(--serif);
+        font-size: 17px;
+        line-height: 1.72;
+        color: var(--ink);
+        font-feature-settings: "kern", "liga", "onum";
+      }
+      .feynman-message-body p { margin: 0 0 0.85em; }
+      .feynman-message-body p:last-child { margin-bottom: 0; }
+      .feynman-message-body p:first-of-type::first-letter {
+        font-weight: 500;
+        font-size: 1.2em;
+        letter-spacing: -0.02em;
+      }
+      .feynman-message-body em { color: var(--ink-soft); }
+      .feynman-message-body code {
+        font-family: var(--mono);
+        font-size: 0.86em;
+        padding: 0 5px;
+        background: rgba(160, 99, 48, 0.08);
+        border-radius: 2px;
+        color: var(--ink);
+      }
+
+      .feynman-message-stream pre {
+        font-family: var(--mono);
+        font-size: 14px;
+        line-height: 1.6;
+        color: var(--ink-soft);
+        margin: 0;
+        white-space: pre-wrap;
+      }
+
+      /* ---- Tool call --------------------------------------------------- */
+
+      .feynman-tool-call::before { content: "03"; }
+      .feynman-tool-call details {
+        font-family: var(--mono);
+        font-size: 13px;
+        background: transparent;
+        border-left: 2px solid var(--paper-rule);
+        padding: 4px 0 4px 14px;
+      }
+      .feynman-tool-call summary {
+        cursor: pointer;
+        color: var(--ink-soft);
+        list-style: none;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .feynman-tool-call summary::-webkit-details-marker { display: none; }
+      .feynman-tool-call summary::before {
+        content: "▸";
+        color: var(--ink-whisper);
+        font-size: 10px;
+        transition: transform 0.15s ease;
+      }
+      .feynman-tool-call details[open] summary::before { transform: rotate(90deg); }
+      .feynman-tool-call .tool-name {
+        color: var(--accent);
+        letter-spacing: 0.02em;
+      }
+      .feynman-tool-call .tool-tag {
+        font-family: var(--sans);
+        font-size: 10px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: var(--ink-whisper);
+      }
+      .feynman-tool-args {
+        margin: 8px 0 4px;
+        padding: 10px 12px;
+        background: rgba(160, 99, 48, 0.04);
+        border-radius: 2px;
+        font-size: 12.5px;
+        line-height: 1.55;
+        color: var(--ink-soft);
+        white-space: pre-wrap;
+      }
+      .feynman-tool-preview {
+        margin: 6px 0 0 14px;
+        padding-left: 14px;
+        border-left: 2px solid var(--paper-rule);
+        font-family: var(--mono);
+        font-size: 12.5px;
+        color: var(--ink-faint);
+      }
+      .feynman-tool-result-ok::before  { content: "✓"; color: var(--success); margin-right: 6px; }
+      .feynman-tool-result-err::before { content: "✗"; color: var(--error);   margin-right: 6px; }
+
+      /* ---- Artifact ---------------------------------------------------- */
+
+      .feynman-artifact::before { content: "04"; }
+      .feynman-artifact a {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-family: var(--serif);
+        font-style: italic;
+        font-size: 16px;
+        color: var(--accent);
+        text-decoration: none;
+        border-bottom: 1px solid transparent;
+        transition: border-color 0.15s ease;
+      }
+      .feynman-artifact a:hover { border-bottom-color: var(--accent); }
+      .feynman-artifact .arrow {
+        font-family: var(--mono);
+        font-size: 14px;
+        font-style: normal;
+        transition: transform 0.15s ease;
+      }
+      .feynman-artifact a:hover .arrow { transform: translateX(2px); }
+      .feynman-artifact .bytes {
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-whisper);
+        margin-left: 10px;
+        font-style: normal;
+      }
+
+      /* ---- Question callout -------------------------------------------- */
+
+      .feynman-question::before { content: "05"; }
+      .feynman-question {
+        border: 1px solid var(--accent);
+        border-left-width: 3px;
+        background: rgba(160, 99, 48, 0.05);
+        padding: 18px 22px 18px 60px;
+        border-radius: 3px;
+      }
+      .feynman-question .label {
+        font-family: var(--sans);
+        font-size: 10px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--accent);
+        margin-bottom: 10px;
+        display: block;
+      }
+      .feynman-question-prompt {
+        font-family: var(--serif);
+        font-size: 16.5px;
+        line-height: 1.6;
+        color: var(--ink);
+        margin-bottom: 14px;
+      }
+      .feynman-question-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .feynman-question-input {
+        width: 100%;
+        background: var(--paper);
+        border: 1px solid var(--paper-rule);
+        padding: 10px 12px;
+        font-family: var(--serif);
+        font-size: 15px;
+        color: var(--ink);
+        resize: vertical;
+        min-height: 64px;
+        border-radius: 2px;
+        font-feature-settings: "kern", "liga";
+      }
+      .feynman-question-input:focus {
+        outline: none;
+        border-color: var(--accent);
+      }
+      .feynman-question-form .submit {
+        align-self: flex-start;
+        background: var(--ink);
+        color: var(--paper);
+        font-family: var(--sans);
+        font-size: 11px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        border: none;
+        padding: 8px 16px;
+        cursor: pointer;
+        border-radius: 1px;
+      }
+      .feynman-question-form .submit:hover { background: var(--accent); }
+
+      /* ---- Terminal callouts ------------------------------------------- */
+
+      .feynman-callout {
+        font-family: var(--serif);
+        font-size: 14px;
+        font-style: italic;
+        color: var(--ink-faint);
+        padding-top: 18px;
+        border-top: 1px solid var(--paper-rule);
+        display: flex;
+        align-items: baseline;
+        gap: 14px;
+      }
+      .feynman-callout::before { content: "—"; font-family: var(--serif); font-style: normal; }
+      .feynman-callout-done::before { color: var(--success); }
+      .feynman-callout-error { color: var(--error); }
+      .feynman-callout-error::before { color: var(--error); }
+      .feynman-callout .timing {
+        font-family: var(--mono);
+        font-size: 11px;
+        font-style: normal;
+        color: var(--ink-whisper);
+        margin-left: auto;
+        letter-spacing: 0.04em;
+      }
+
+      /* ---- Approval modal (overlay) ------------------------------------ */
+
+      .modal-wrap {
+        position: absolute;
+        inset: 0;
+        background: var(--modal-veil);
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding: 40px 60px 40px 0;
+        pointer-events: none;
+      }
+      .feynman-tool-approval-modal {
+        pointer-events: auto;
+        background: var(--paper);
+        border: 1px solid var(--chrome-edge);
+        max-width: 340px;
+        padding: 26px 28px;
+        font-family: var(--serif);
+        color: var(--ink);
+        box-shadow: 0 24px 48px -12px rgba(29, 26, 20, 0.4);
+        border-radius: 3px;
+        position: relative;
+      }
+      .feynman-tool-approval-modal::before {
+        content: "approval requested";
+        position: absolute;
+        top: 12px;
+        left: 28px;
+        font-family: var(--sans);
+        font-size: 9.5px;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
+        color: var(--accent);
+      }
+      .feynman-tool-approval-modal h3 {
+        font-family: var(--serif);
+        font-size: 20px;
+        font-weight: 500;
+        margin: 14px 0 4px;
+        line-height: 1.25;
+        color: var(--ink);
+      }
+      .feynman-tool-approval-id {
+        font-family: var(--mono);
+        font-size: 10.5px;
+        color: var(--ink-whisper);
+        letter-spacing: 0.04em;
+        margin: 0 0 16px;
+      }
+      .feynman-tool-approval-args-label {
+        font-family: var(--sans);
+        font-size: 9.5px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        color: var(--ink-whisper);
+        margin: 0 0 6px;
+      }
+      .feynman-tool-approval-args {
+        font-family: var(--mono);
+        font-size: 12px;
+        background: rgba(160, 99, 48, 0.05);
+        border-left: 2px solid var(--accent-soft);
+        padding: 10px 12px;
+        margin: 0 0 18px;
+        white-space: pre-wrap;
+        color: var(--ink-soft);
+        border-radius: 2px;
+      }
+      .feynman-tool-approval-buttons {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .feynman-tool-approval-buttons button {
+        font-family: var(--sans);
+        font-size: 11px;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        padding: 8px 12px;
+        border: 1px solid var(--chrome-edge);
+        background: transparent;
+        color: var(--ink-soft);
+        cursor: pointer;
+        border-radius: 1px;
+      }
+      .feynman-tool-approval-buttons button.mod-cta {
+        background: var(--ink);
+        color: var(--paper);
+        border-color: var(--ink);
+      }
+      .feynman-tool-approval-buttons button.mod-warning {
+        color: var(--error);
+        border-color: rgba(138, 47, 36, 0.4);
+      }
+      .feynman-tool-approval-buttons button:hover { border-color: var(--accent); color: var(--accent); }
+      .feynman-tool-approval-buttons button.mod-cta:hover { background: var(--accent); border-color: var(--accent); color: var(--paper); }
+
+      /* ---- Status row at bottom of pane -------------------------------- */
+
+      .status-rule {
+        max-width: 660px;
+        margin: 0 auto;
+        padding: 28px 32px;
+        border-top: 1px solid var(--paper-rule);
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        font-family: var(--mono);
+        font-size: 11px;
+        color: var(--ink-whisper);
+      }
+      .status-rule .glyph {
+        font-family: var(--serif);
+        color: var(--accent);
+        font-style: italic;
+      }
+      .status-rule .spacer { flex: 1; }
+
+      /* ---- Footnotes ---------------------------------------------------- */
+
+      .footnotes {
+        max-width: 1100px;
+        margin: 0 auto 60px;
+        padding: 12px 28px 0;
+        font-family: var(--sans);
+        font-size: 11px;
+        color: var(--ink-whisper);
+        letter-spacing: 0.04em;
+      }
+      .footnotes em { color: var(--ink-faint); font-style: italic; }
+
+      @media (max-width: 880px) {
+        .obsidian-frame { grid-template-columns: 1fr; }
+        .sidebar { display: none; }
+        .modal-wrap { padding: 20px; justify-content: center; }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ============================================================== -->
+    <!--  Meta strip                                                     -->
+    <!-- ============================================================== -->
+
+    <header class="meta">
+      <strong>Feynman</strong>
+      <span>chat view · design mockup</span>
+      <span class="meta-spacer"></span>
+      <button class="theme-toggle" id="theme-toggle" type="button">
+        toggle theme
+      </button>
+    </header>
+
+    <!-- ============================================================== -->
+    <!--  Obsidian frame                                                 -->
+    <!-- ============================================================== -->
+
+    <main class="obsidian-frame">
+      <div class="frame-tabs">
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <div class="dot"></div>
+        <span class="tab">paper-companion.md</span>
+        <span class="tab active">Feynman · chat</span>
+        <span class="tab">Feynman/outputs</span>
+      </div>
+
+      <aside class="sidebar">
+        <h3>Vault</h3>
+        <ul>
+          <li><span class="glyph">›</span> Papers</li>
+          <li><span class="glyph">›</span> Notes</li>
+          <li><span class="glyph">▾</span> Feynman</li>
+          <li style="padding-left: 18px;">outputs</li>
+          <li style="padding-left: 18px;">notes</li>
+          <li style="padding-left: 18px;">papers</li>
+        </ul>
+        <h3>Workflows</h3>
+        <ul>
+          <li>/deepresearch</li>
+          <li>/lit</li>
+          <li class="active">/review</li>
+          <li>/audit</li>
+          <li>/replicate</li>
+        </ul>
+      </aside>
+
+      <section class="chat-pane">
+        <div class="feynman-chat-view">
+          <!-- ------------------------------------------------------------ -->
+          <!--  Wordmark + status row                                       -->
+          <!-- ------------------------------------------------------------ -->
+
+          <div class="header">
+            <div class="mark">
+              <div class="wordmark">Feynman<em>.</em></div>
+              <div class="tagline">research, in your notebook</div>
+            </div>
+
+            <svg class="diagram" viewBox="0 0 120 36" aria-hidden="true">
+              <!-- a tiny Feynman diagram: straight line, wavy line, vertex -->
+              <line x1="2" y1="28" x2="60" y2="28"
+                    stroke="currentColor" stroke-width="1" />
+              <path d="M60,28 Q66,18 72,28 T84,28 T96,28 T108,28"
+                    fill="none" stroke="currentColor" stroke-width="1" />
+              <line x1="60" y1="28" x2="76" y2="6"
+                    stroke="currentColor" stroke-width="1" />
+              <circle cx="60" cy="28" r="2.4" fill="currentColor" />
+            </svg>
+
+            <div class="header-pills">
+              <span class="pill">
+                <span class="dot-status"></span>docker · :7777
+              </span>
+              <span class="pill">claude-3.7-sonnet</span>
+              <span class="pill run-id">
+                <span class="dot-status live"></span>run 9f3a · streaming
+              </span>
+            </div>
+          </div>
+
+          <!-- ------------------------------------------------------------ -->
+          <!--  Conversation log                                            -->
+          <!-- ------------------------------------------------------------ -->
+
+          <div class="feynman-chat-log">
+            <div class="invocation">
+              <span class="slash">/review</span>
+              <span class="args">attention-is-all-you-need.pdf, focus on cited critiques</span>
+            </div>
+
+            <!-- Thinking ------------------------------------------------ -->
+            <div class="feynman-thinking">
+              <span class="feynman-message-role">thinking</span>
+              <div class="feynman-thinking-body">
+                Reading the abstract first to identify the paper's three
+                load-bearing claims, then pulling cited critiques from
+                Mihaylov &amp; Frank (2018) and Wang et&nbsp;al. (2020) before
+                composing the review<span class="cursor"></span>
+              </div>
+            </div>
+
+            <!-- Agent message ------------------------------------------ -->
+            <div class="feynman-message">
+              <span class="feynman-message-role">assistant</span>
+              <div class="feynman-message-body feynman-message-rendered">
+                <p>
+                  The paper's central claim — that <em>attention is sufficient</em>
+                  for sequence modelling when scaled appropriately — has
+                  weathered six years of follow-up work better than the
+                  original critique suggested. The selection you highlighted
+                  argues that the attention mechanism lacks an
+                  inductive bias for locality, but later work
+                  (<code>RoPE</code>, <code>ALiBi</code>) supplies precisely
+                  that bias <em>without</em> reintroducing recurrence.
+                </p>
+                <p>
+                  Three specific points in your selection are worth pushing
+                  back on. The first concerns the parameter-count comparison
+                  with LSTM baselines — the cited 2017 numbers exclude the
+                  embedding table, which favors the Transformer unfairly by
+                  roughly 30%. The second…
+                </p>
+              </div>
+            </div>
+
+            <!-- Tool call ---------------------------------------------- -->
+            <div class="feynman-tool-call">
+              <span class="feynman-message-role">tool call</span>
+              <details open>
+                <summary>
+                  <span class="tool-name">search_arxiv</span>
+                  <span class="tool-tag">via alphaXiv</span>
+                </summary>
+                <pre class="feynman-tool-args">{
+  "query": "attention locality bias rotary",
+  "limit": 6,
+  "since": "2022-01-01"
+}</pre>
+                <div class="feynman-tool-preview feynman-tool-result-ok">
+                  6 results · top hit: <em>Su et&nbsp;al., RoFormer (2022)</em>
+                </div>
+              </details>
+            </div>
+
+            <!-- Artifact ----------------------------------------------- -->
+            <div class="feynman-artifact">
+              <span class="feynman-message-role">artifact</span>
+              <a href="#">
+                <span class="arrow">↪</span>
+                Feynman/outputs/attention-review.md
+                <span class="bytes">4.2&nbsp;KB</span>
+              </a>
+            </div>
+
+            <!-- Question callout --------------------------------------- -->
+            <div class="feynman-question">
+              <span class="label">awaiting your input</span>
+              <div class="feynman-question-prompt">
+                Should I also pull the survey of retrieval-augmented
+                methods (Gao&nbsp;et&nbsp;al., 2024), or keep the review
+                scoped to the original transformer thread?
+              </div>
+              <div class="feynman-question-form">
+                <textarea
+                  class="feynman-question-input"
+                  placeholder="Your answer (markdown)…"
+                ></textarea>
+                <button class="submit" type="button">Send answer</button>
+              </div>
+            </div>
+
+            <!-- Done callout ------------------------------------------- -->
+            <div class="feynman-callout feynman-callout-done">
+              done · exit 0 — review written, 1 follow-up pending
+              <span class="timing">2m 41s · 247 events</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Status rule -------------------------------------------------- -->
+        <div class="status-rule">
+          <span class="glyph">¶</span>
+          <span>writing to <em>Feynman/.staging/9f3a/</em></span>
+          <span class="spacer"></span>
+          <span>247 events buffered</span>
+          <span>id 247</span>
+        </div>
+
+        <!-- Approval modal overlay -------------------------------------- -->
+        <div class="modal-wrap">
+          <div class="feynman-tool-approval-modal" role="dialog" aria-modal="true">
+            <h3>Allow Feynman to fetch the full PDF?</h3>
+            <p class="feynman-tool-approval-id">request id · ui-req-42c</p>
+            <p class="feynman-tool-approval-args-label">payload</p>
+            <pre class="feynman-tool-approval-args">{
+  "url": "https://arxiv.org/pdf/2104.09864",
+  "bytes_cap": 5242880
+}</pre>
+            <div class="feynman-tool-approval-buttons">
+              <button class="mod-cta" type="button">Allow</button>
+              <button type="button">Allow once</button>
+              <button class="mod-warning" type="button">Deny</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <p class="footnotes">
+      <em>Components shown:</em> wordmark + status row · thinking trace ·
+      assistant message (hybrid plain→markdown render) · tool call (open
+      details) · artifact link · question callout · run.done callout ·
+      tool-approval modal. All classes match those produced by
+      <code style="font-family: var(--mono);">src/views/chat-view.ts</code>
+      and <code style="font-family: var(--mono);">src/views/tool-approval.ts</code>,
+      so this mockup translates 1:1 into the plugin's
+      <code style="font-family: var(--mono);">styles.css</code>.
+    </p>
+
+    <script>
+      // Light/dark toggle — flips the data-theme on <html>.
+      const toggle = document.getElementById("theme-toggle");
+      toggle.addEventListener("click", () => {
+        const root = document.documentElement;
+        root.dataset.theme = root.dataset.theme === "dark" ? "light" : "dark";
+      });
+    </script>
+  </body>
+</html>
