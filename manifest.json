@@ -1,9 +1,9 @@
 {
   "id": "feynman-research-agent",
-  "name": "Feynman",
-  "version": "1.0.0",
+  "name": "Feynman - AI research assistant",
+  "version": "1.0.1",
   "minAppVersion": "1.5.0",
-  "description": "A research agent for your vault. Runs locally in Docker against your own Anthropic API key.",
+  "description": "AI research assistant for your vault. Runs locally in Docker against your own Anthropic API key.",
   "author": "Alex Rogers",
   "isDesktopOnly": true
 }
