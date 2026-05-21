@@ -2,7 +2,7 @@
 
 A research agent for your vault. Runs locally in Docker against your own Anthropic API key.
 
-![Screenshot placeholder — chat view](docs/screenshot-chat.png)
+![Feynman chat panel in Obsidian — running /deepresearch on a vault note](docs/feynman-screenshot.png)
 
 ## Requirements
 
@@ -15,7 +15,7 @@ A research agent for your vault. Runs locally in Docker against your own Anthrop
 ### Option A — build from source
 
 ```sh
-git clone https://github.com/alexandermrogers/feynman-research-agent.git
+git clone https://github.com/icarian-systems/feynman-research-agent.git
 cd feynman-research-agent
 npm install
 npm run build
@@ -41,15 +41,15 @@ After enabling the plugin, follow [`docs/SETUP.md`](docs/SETUP.md) to pull the D
 
 Read this carefully before using the plugin.
 
-- **API keys are stored in plaintext.** Your Anthropic API key (and any optional provider keys you add — OpenAI, Exa, Perplexity, Gemini) are written verbatim to `<vault>/.obsidian/plugins/feynman-research-agent/data.json`. The plugin does not encrypt this file. If you have **Obsidian Sync** with "Sync plugin config" enabled, this file will sync to every device on that account.
+- **API keys are stored in plaintext, outside the vault.** Your Anthropic API key (and any optional provider keys you add — OpenAI, Exa, Perplexity, Gemini) are written verbatim to `~/.feynman/secrets.json` (file mode `0600`). The plugin does not encrypt this file. Because secrets live outside the vault, they are **not** carried by Obsidian Sync and are **not** visible to the agent process inside the Docker container's bind mount. Non-secret settings (model preferences, workspace folder, etc.) still live in `<vault>/.obsidian/plugins/feynman-research-agent/data.json`.
 - **The server runs on loopback by default.** The plugin talks to a Docker container bound to `127.0.0.1`. There is no cloud/managed-Modal tier shipped in v1 — that mode is disabled in settings until a later release.
 - **A random bearer token guards the loopback server.** On first **Set up Docker** the plugin mints a 32-byte hex `FEYNMAN_AUTH_TOKEN` and writes it into the container env-file. Without that header any other process on your machine (browser tabs included) gets `401 Unauthorized` from `http://127.0.0.1:7777`. Self-hosted users must set the same env var on their server and paste the value into Settings.
 - **Self-hosted base URLs are HTTPS-only outside loopback.** The settings UI rejects `http://` for any host that isn't `127.0.0.1`, `localhost`, or `::1`, so the bearer token doesn't fly in plaintext.
 - **Outbound LLM traffic goes from your local Docker container directly to Anthropic.** The plugin itself does not forward prompt content, vault content, or tool I/O to any third party.
-- **The optional waitlist signup POSTs your email to `api.getwaitlist.com`** (a third-party service) if and only if you submit the waitlist form. The waitlist UI is gated off by default in v1.
+- **The optional waitlist signup POSTs your email to `api.getwaitlist.com`** (a third-party service) if and only if you submit the waitlist form. The waitlist button is visible in Settings by default; the request is sent only when you submit the form, and you can hide the UI entirely by disabling the waitlist feature flag in Settings.
 - **Tool calls require explicit approval.** Any tool the agent wants to run (filesystem write, shell, etc.) surfaces a modal with the actual command and path. **Deny** is the default-focused button.
 
-If you don't want your keys leaving the device on which you typed them, disable **Sync plugin config** in Obsidian Sync settings, or use a vault that isn't syncing.
+If you don't want your keys leaving the device on which you typed them, the default setup already keeps them on-device: `~/.feynman/secrets.json` is outside any vault and is never touched by Obsidian Sync.
 
 ## Notes on Obsidian APIs
 
