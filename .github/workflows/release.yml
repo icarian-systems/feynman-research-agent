@@ -9,7 +9,7 @@ name: Release
 on:
   push:
     tags:
-      - "v*"
+      - "[0-9]*.[0-9]*.[0-9]*"
 
 permissions:
   contents: write
@@ -38,8 +38,10 @@ jobs:
           test -f manifest.json
           test -f styles.css
           echo "main.js size: $(wc -c < main.js) bytes"
-          # Confirm manifest version matches the tag (strip leading 'v').
-          tag="${GITHUB_REF_NAME#v}"
+          # Obsidian requires the release tag to exactly equal manifest.version
+          # (no leading 'v', no suffix). Reject anything else so we never publish
+          # a release that fails the community-directory reviewer's check.
+          tag="${GITHUB_REF_NAME}"
           manifest_version="$(node -p "require('./manifest.json').version")"
           if [ "$tag" != "$manifest_version" ]; then
             echo "::error::Tag ($tag) does not match manifest.json version ($manifest_version)" >&2
