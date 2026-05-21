@@ -88,7 +88,7 @@ test("validatePath: rejects dot-prefixed segments (.obsidian, .git, .env)", () =
   // Top-level dotfolder — the prime exfil target (.obsidian holds plugin
   // settings + tokens for other plugins).
   assert.equal(
-    validatePath(".obsidian/plugins/feynman/data.json"),
+    validatePath(".obsidian/plugins/feynman-research-agent/data.json"),
     "dot-segment:.obsidian",
   );
   assert.equal(validatePath(".env"), "dot-segment:.env");

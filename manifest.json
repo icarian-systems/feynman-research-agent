@@ -1,9 +1,9 @@
 {
-  "id": "feynman",
+  "id": "feynman-research-agent",
   "name": "Feynman",
   "version": "1.0.0",
   "minAppVersion": "1.5.0",
-  "description": "Feynman research agent for Obsidian. Local Docker server with bring-your-own Anthropic key.",
+  "description": "A research agent for your vault. Runs locally in Docker against your own Anthropic API key.",
   "author": "Alex Rogers",
   "isDesktopOnly": true
 }

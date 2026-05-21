@@ -1,7 +1,7 @@
 // Secrets store — persists credential material outside the vault.
 //
 // Pre-1.0 builds wrote the Anthropic key, bearer token, provider keys and
-// license key into `<vault>/.obsidian/plugins/feynman/data.json` alongside
+// license key into `<vault>/.obsidian/plugins/feynman-research-agent/data.json` alongside
 // non-secret settings. Because the Docker container bind-mounts the vault,
 // the agent process running inside the container could read its own auth
 // file with one syscall. Moving secrets to `~/.feynman/secrets.json` (mode

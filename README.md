@@ -24,7 +24,7 @@ npm run build
 Then copy `main.js`, `manifest.json`, and `styles.css` into your vault at:
 
 ```
-<vault>/.obsidian/plugins/feynman/
+<vault>/.obsidian/plugins/feynman-research-agent/
 ```
 
 Reload Obsidian, open **Settings → Community plugins**, and enable **Feynman**.
@@ -41,7 +41,7 @@ After enabling the plugin, follow [`docs/SETUP.md`](docs/SETUP.md) to pull the D
 
 Read this carefully before using the plugin.
 
-- **API keys are stored in plaintext.** Your Anthropic API key (and any optional provider keys you add — OpenAI, Exa, Perplexity, Gemini) are written verbatim to `<vault>/.obsidian/plugins/feynman/data.json`. The plugin does not encrypt this file. If you have **Obsidian Sync** with "Sync plugin config" enabled, this file will sync to every device on that account.
+- **API keys are stored in plaintext.** Your Anthropic API key (and any optional provider keys you add — OpenAI, Exa, Perplexity, Gemini) are written verbatim to `<vault>/.obsidian/plugins/feynman-research-agent/data.json`. The plugin does not encrypt this file. If you have **Obsidian Sync** with "Sync plugin config" enabled, this file will sync to every device on that account.
 - **The server runs on loopback by default.** The plugin talks to a Docker container bound to `127.0.0.1`. There is no cloud/managed-Modal tier shipped in v1 — that mode is disabled in settings until a later release.
 - **A random bearer token guards the loopback server.** On first **Set up Docker** the plugin mints a 32-byte hex `FEYNMAN_AUTH_TOKEN` and writes it into the container env-file. Without that header any other process on your machine (browser tabs included) gets `401 Unauthorized` from `http://127.0.0.1:7777`. Self-hosted users must set the same env var on their server and paste the value into Settings.
 - **Self-hosted base URLs are HTTPS-only outside loopback.** The settings UI rejects `http://` for any host that isn't `127.0.0.1`, `localhost`, or `::1`, so the bearer token doesn't fly in plaintext.
