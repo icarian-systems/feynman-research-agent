@@ -49,6 +49,12 @@ export interface RegisterCommandsDeps {
   onLastEventIdAdvance?: (runId: string, eventId: string) => void;
   /** Docker supervisor — used by the Diagnose Docker command. */
   supervisor?: DockerSupervisor;
+  /** Auto-open-artifacts preference — forwarded to runWorkflow. */
+  getAutoOpenArtifacts?: () => "off" | "last" | "all";
+  /** Vault-relative workspace folder — forwarded to runWorkflow. */
+  getWorkspaceFolder?: () => string;
+  /** Auto-yes for agent prompts — forwarded to runWorkflow. */
+  getAutoApproveAgentPrompts?: () => boolean;
 }
 
 export function registerCommands(
@@ -63,6 +69,9 @@ export function registerCommands(
     registry,
     onLastEventIdAdvance,
     supervisor,
+    getAutoOpenArtifacts,
+    getWorkspaceFolder,
+    getAutoApproveAgentPrompts,
   } = deps;
 
   // Obsidian prepends the plugin name to every command name in the palette,
@@ -80,6 +89,9 @@ export function registerCommands(
             getModel,
             registry,
             onLastEventIdAdvance,
+            getAutoOpenArtifacts,
+            getWorkspaceFolder,
+            getAutoApproveAgentPrompts,
           });
         }).open();
       },

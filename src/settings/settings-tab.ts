@@ -8,8 +8,13 @@ import { App, FileSystemAdapter, Notice, PluginSettingTab, Setting, requestUrl }
 import { platform } from "node:os";
 import type FeynmanPlugin from "../../main";
 import { WaitlistModal } from "../views/waitlist-modal";
-import { DockerDiagnoseModal } from "../views/docker-diagnose-modal";
-import { resolveBaseUrl as resolveBaseUrlForPlugin } from "./derive";
+import { OAuthLoginModal } from "../views/oauth-login-modal";
+import {
+  AuthClient,
+  type ConfiguredProvider,
+  type OAuthProviderInfo,
+} from "../transport/auth-client";
+import { resolveBaseUrl as resolveBaseUrlForPlugin, resolveAuth } from "./derive";
 import {
   DockerSupervisor,
   defaultEnvFilePath,
@@ -171,6 +176,24 @@ export interface FeynmanSettings {
 
   model: string;               // id from /v1/manifest.models[].id
   workspaceFolder: string;     // default "Feynman/"
+  /**
+   * Auto-open behavior for documents the agent creates (via `artifact.written`).
+   *   - "off"  : never auto-open; the chat-view callout's clickable links are
+   *              the only entry point.
+   *   - "last" : when the run finishes, open the last artifact written. Most
+   *              workflows write supporting files first and the summary doc
+   *              last, so this surfaces the user's likely target.
+   *   - "all"  : open every artifact in its own pane on run.done.
+   * Default: "last".
+   */
+  autoOpenArtifacts: "off" | "last" | "all";
+  /**
+   * Whether to auto-accept agent-driven prompts (`tool.approval_required`
+   * and `agent.question`). The plugin has no persistent chat interface for
+   * back-and-forth, so by default we say "yes" and let the agent proceed.
+   * Disable to surface the existing modal/form for each prompt.
+   */
+  autoApproveAgentPrompts: boolean;
 
   /** Flips to true after the user successfully tests a server connection. */
   onboardingCompleted: boolean;
@@ -211,6 +234,8 @@ export const DEFAULT_SETTINGS: FeynmanSettings = {
   modal: { licenseKey: "" },
   model: "",
   workspaceFolder: "Feynman/",
+  autoOpenArtifacts: "last",
+  autoApproveAgentPrompts: true,
   onboardingCompleted: false,
   onboardingSkippedAt: null,
   features: { waitlist: { enabled: true } },
@@ -595,14 +620,6 @@ export class FeynmanSettingTab extends PluginSettingTab {
       void this.runPullLatest(pullLatestBtn, dockerStatusEl);
     });
 
-    const diagnoseBtn = dockerActions.createEl("button", {
-      text: "Diagnose Docker",
-      attr: { type: "button" },
-    });
-    this.plugin.registerDomEvent(diagnoseBtn, "click", () => {
-      new DockerDiagnoseModal(this.app, this.supervisor).open();
-    });
-
     // --- Option 2: Feynman Cloud (waitlist) ---------------------------
     const cloudCard = wrap.createDiv({
       cls: "feynman-onboarding-card",
@@ -797,6 +814,12 @@ export class FeynmanSettingTab extends PluginSettingTab {
     // ----- Authentication subsection -----
     new Setting(host).setName("Authentication").setHeading();
 
+    // OAuth sign-in lives above the API key fields — for users on Claude Pro,
+    // ChatGPT Plus, etc. an OAuth login is the preferred path (no key copying).
+    // API keys remain available below for users without a subscription.
+    this.renderOAuthSection(host);
+    this.renderAlphaSection(host);
+
     const anthropicSetting = new Setting(host)
       .setName("Anthropic API key")
       .setDesc("Required. Passed into the container as ANTHROPIC_API_KEY.")
@@ -927,14 +950,6 @@ export class FeynmanSettingTab extends PluginSettingTab {
     this.plugin.registerDomEvent(pullBtn, "click", () => {
       void this.runPullLatestAndRefresh(pullBtn, panel);
     });
-
-    const diagnoseBtn = actions.createEl("button", {
-      text: "Diagnose Docker",
-      attr: { type: "button" },
-    });
-    this.plugin.registerDomEvent(diagnoseBtn, "click", () => {
-      new DockerDiagnoseModal(this.app, this.supervisor).open();
-    });
   }
 
   /** Run setup, then re-render the status panel so the UI catches up. */
@@ -1055,6 +1070,292 @@ export class FeynmanSettingTab extends PluginSettingTab {
     btn.setText(originalText);
     await this.renderDockerStatusPanel(panel);
     this.clearPendingRestart();
+  }
+
+  /**
+   * Render the "Sign in with provider" section above the API key inputs.
+   * The list is fetched lazily from `/v1/auth/providers` once the container
+   * is reachable; if the server can't be reached we show a one-line message
+   * with a Retry button. Configured/signed-in state is queried from
+   * `/v1/auth/configured` and refreshed after each successful sign-in.
+   */
+  private renderOAuthSection(host: HTMLElement): void {
+    const section = host.createDiv({ cls: "feynman-oauth-section" });
+    const headerSetting = new Setting(section)
+      .setName("Sign in with provider")
+      .setDesc(
+        "Use a subscription you already have (Claude Pro, ChatGPT Plus, GitHub Copilot, etc.) instead of pasting an API key. Requires the container to be running.",
+      );
+    headerSetting.descEl.addClass("feynman-oauth-desc");
+
+    const list = section.createDiv({ cls: "feynman-oauth-list" });
+    const statusLine = section.createDiv({ cls: "feynman-oauth-status-line" });
+
+    const renderLoading = (msg: string): void => {
+      list.empty();
+      statusLine.setText(msg);
+    };
+
+    const renderError = (err: string): void => {
+      list.empty();
+      statusLine.empty();
+      const wrap = statusLine.createDiv({ cls: "feynman-warning" });
+      wrap.createSpan({ text: err });
+      const retry = wrap.createEl("button", {
+        text: "Retry",
+        attr: { type: "button" },
+        cls: "feynman-oauth-retry",
+      });
+      this.plugin.registerDomEvent(retry, "click", () => {
+        void load();
+      });
+    };
+
+    const renderList = (
+      providers: OAuthProviderInfo[],
+      configured: Set<string>,
+    ): void => {
+      list.empty();
+      statusLine.empty();
+      if (providers.length === 0) {
+        statusLine.setText("No OAuth providers registered on the server.");
+        return;
+      }
+      for (const provider of providers) {
+        const row = list.createDiv({ cls: "feynman-oauth-row" });
+        const labelBox = row.createDiv({ cls: "feynman-oauth-row-label" });
+        labelBox.createDiv({
+          cls: "feynman-oauth-row-name",
+          text: provider.name,
+        });
+        const isSignedIn = configured.has(provider.id);
+        labelBox.createDiv({
+          cls: isSignedIn
+            ? "feynman-oauth-row-state feynman-oauth-signed-in"
+            : "feynman-oauth-row-state",
+          text: isSignedIn ? "Signed in" : "Not signed in",
+        });
+
+        const actions = row.createDiv({ cls: "feynman-oauth-row-actions" });
+        const primary = actions.createEl("button", {
+          text: isSignedIn ? "Re-sign in" : "Sign in",
+          attr: { type: "button" },
+          cls: isSignedIn ? "" : "mod-cta",
+        });
+        this.plugin.registerDomEvent(primary, "click", () => {
+          this.openOAuthModal(provider);
+        });
+        if (isSignedIn) {
+          const out = actions.createEl("button", {
+            text: "Sign out",
+            attr: { type: "button" },
+          });
+          this.plugin.registerDomEvent(out, "click", () => {
+            void this.signOutProvider(provider.id);
+          });
+        }
+      }
+    };
+
+    const load = async (): Promise<void> => {
+      renderLoading("Loading providers…");
+      const client = this.makeAuthClient();
+      if (client === null) {
+        renderError(
+          "OAuth requires the local Docker backend with a connected container.",
+        );
+        return;
+      }
+      try {
+        const [providers, configured] = await Promise.all([
+          client.listProviders(),
+          client.listConfigured(),
+        ]);
+        const configuredIds = new Set(configured.map((c) => c.id));
+        renderList(providers, configuredIds);
+      } catch (err) {
+        renderError(
+          `Could not reach the server — ${truncate(err instanceof Error ? err.message : String(err), 120)}`,
+        );
+      }
+    };
+
+    // Stash the loader on the section so the modal's onComplete can refresh
+    // sign-in status without rebuilding the entire settings tree.
+    (section as unknown as { feynmanReload?: () => Promise<void> }).feynmanReload =
+      load;
+
+    void load();
+  }
+
+  /** Build an AuthClient for the OAuth section. Returns null when the backend
+   * isn't Docker (the OAuth endpoints only exist on the local server) or
+   * when no bearer is set yet. */
+  private makeAuthClient(): AuthClient | null {
+    if (this.plugin.settings.backend !== "docker" && this.plugin.settings.backend !== "self-hosted") {
+      return null;
+    }
+    const baseUrl = resolveBaseUrlForPlugin(this.plugin.settings);
+    return new AuthClient({
+      baseUrl,
+      getAuth: () => resolveAuth(this.plugin.settings),
+      clientVersion: this.plugin.manifest.version,
+    });
+  }
+
+  private openOAuthModal(provider: OAuthProviderInfo): void {
+    const client = this.makeAuthClient();
+    if (client === null) {
+      new Notice("OAuth requires the local Docker backend.");
+      return;
+    }
+    const modal = new OAuthLoginModal(this.app, {
+      providerId: provider.id,
+      providerName: provider.name,
+      client,
+      onComplete: () => {
+        // After a successful login the configured list changes — reload the
+        // section in place.
+        const section = this.containerEl.querySelector(
+          ".feynman-oauth-section",
+        ) as (HTMLElement & { feynmanReload?: () => Promise<void> }) | null;
+        void section?.feynmanReload?.();
+        // The container's env-file doesn't carry OAuth tokens (those live in
+        // auth.json inside the container), so no restart is needed. But the
+        // server only re-reads auth.json on cold start of each model
+        // request — so we don't need to nudge the user. Suppress the
+        // pending-restart banner for OAuth changes.
+      },
+    });
+    modal.open();
+  }
+
+  private async signOutProvider(providerId: string): Promise<void> {
+    const client = this.makeAuthClient();
+    if (client === null) return;
+    try {
+      await client.logout(providerId);
+      new Notice(`Signed out of ${providerId}.`);
+      const section = this.containerEl.querySelector(
+        ".feynman-oauth-section",
+      ) as (HTMLElement & { feynmanReload?: () => Promise<void> }) | null;
+      void section?.feynmanReload?.();
+    } catch (err) {
+      new Notice(
+        `Sign-out failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Render the alphaXiv sign-in section. Separate from the model OAuth list
+   * because alphaXiv has its own IdP (clerk.alphaxiv.org), its own auth.json
+   * (~/.ahub/auth.json), and its tools (/lit search, paper fetch) only work
+   * once the user is signed in.
+   */
+  private renderAlphaSection(host: HTMLElement): void {
+    const section = host.createDiv({ cls: "feynman-oauth-section feynman-alpha-section" });
+    const header = new Setting(section)
+      .setName("alphaXiv")
+      .setDesc(
+        "Sign in to alphaXiv so the /lit and paper-fetch tools can search, fetch, and annotate papers. Free account — no API key needed.",
+      );
+    header.descEl.addClass("feynman-oauth-desc");
+
+    const row = section.createDiv({ cls: "feynman-oauth-row" });
+    const labelBox = row.createDiv({ cls: "feynman-oauth-row-label" });
+    labelBox.createDiv({ cls: "feynman-oauth-row-name", text: "alphaXiv" });
+    const stateEl = labelBox.createDiv({ cls: "feynman-oauth-row-state" });
+    stateEl.setText("Checking…");
+
+    const actions = row.createDiv({ cls: "feynman-oauth-row-actions" });
+
+    const reload = async (): Promise<void> => {
+      const client = this.makeAuthClient();
+      if (client === null) {
+        stateEl.setText("Requires the local Docker backend.");
+        actions.empty();
+        return;
+      }
+      try {
+        const status = await client.getAlphaStatus();
+        actions.empty();
+        if (status.loggedIn) {
+          stateEl.removeClass("feynman-oauth-signed-in");
+          stateEl.addClass("feynman-oauth-signed-in");
+          stateEl.setText(status.userName ? `Signed in as ${status.userName}` : "Signed in");
+          const reSign = actions.createEl("button", {
+            text: "Re-sign in",
+            attr: { type: "button" },
+          });
+          this.plugin.registerDomEvent(reSign, "click", () => this.openAlphaModal());
+          const out = actions.createEl("button", {
+            text: "Sign out",
+            attr: { type: "button" },
+          });
+          this.plugin.registerDomEvent(out, "click", () => void this.signOutAlpha());
+        } else {
+          stateEl.removeClass("feynman-oauth-signed-in");
+          stateEl.setText("Not signed in");
+          const signIn = actions.createEl("button", {
+            text: "Sign in",
+            cls: "mod-cta",
+            attr: { type: "button" },
+          });
+          this.plugin.registerDomEvent(signIn, "click", () => this.openAlphaModal());
+        }
+      } catch (err) {
+        stateEl.setText(
+          `Could not reach server — ${truncate(err instanceof Error ? err.message : String(err), 80)}`,
+        );
+        actions.empty();
+        const retry = actions.createEl("button", {
+          text: "Retry",
+          attr: { type: "button" },
+        });
+        this.plugin.registerDomEvent(retry, "click", () => void reload());
+      }
+    };
+
+    (section as unknown as { feynmanReload?: () => Promise<void> }).feynmanReload = reload;
+    void reload();
+  }
+
+  private openAlphaModal(): void {
+    const client = this.makeAuthClient();
+    if (client === null) {
+      new Notice("alphaXiv sign-in requires the local Docker backend.");
+      return;
+    }
+    const modal = new OAuthLoginModal(this.app, {
+      kind: "alpha",
+      providerName: "alphaXiv",
+      client,
+      onComplete: () => {
+        const section = this.containerEl.querySelector(
+          ".feynman-alpha-section",
+        ) as (HTMLElement & { feynmanReload?: () => Promise<void> }) | null;
+        void section?.feynmanReload?.();
+      },
+    });
+    modal.open();
+  }
+
+  private async signOutAlpha(): Promise<void> {
+    const client = this.makeAuthClient();
+    if (client === null) return;
+    try {
+      await client.alphaLogout();
+      new Notice("Signed out of alphaXiv.");
+      const section = this.containerEl.querySelector(
+        ".feynman-alpha-section",
+      ) as (HTMLElement & { feynmanReload?: () => Promise<void> }) | null;
+      void section?.feynmanReload?.();
+    } catch (err) {
+      new Notice(
+        `Sign-out failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   /**
@@ -1276,5 +1577,23 @@ export class FeynmanSettingTab extends PluginSettingTab {
             this.queueSave();
           }),
       );
+    new Setting(host)
+      .setName("Auto-open created documents")
+      .setDesc(
+        "When a run finishes, open the document(s) it wrote in new panes so you can review them immediately.",
+      )
+      .addDropdown((dd) => {
+        dd.addOption("last", "Open the last document (recommended)");
+        dd.addOption("all", "Open every document");
+        dd.addOption("off", "Don't auto-open");
+        dd.setValue(this.plugin.settings.autoOpenArtifacts);
+        dd.onChange((v) => {
+          this.plugin.settings.autoOpenArtifacts = v as
+            | "off"
+            | "last"
+            | "all";
+          this.queueSave();
+        });
+      });
   }
 }

@@ -512,6 +512,28 @@ export class DockerSupervisor {
       envFilePath,
       "-p",
       `127.0.0.1:${String(port)}:7777`,
+      // alphaXiv login callback. The OAuth flow registers a fixed redirect
+      // URI of `http://127.0.0.1:9876/callback`, so the container's port
+      // 9876 must be reachable at the host's 127.0.0.1:9876 for the
+      // browser-side redirect to land. Loopback-only — never exposed to
+      // the network.
+      "-p",
+      "127.0.0.1:9876:9876",
+      // Persist OAuth credentials across container recreations. Without these
+      // mounts the container's writable layer is discarded every time we run
+      // `docker rm -f` / `docker run -d` (which the plugin does on every
+      // Restart Container), so the user's model-OAuth tokens at
+      // `~/.feynman/agent/auth.json` and alphaXiv tokens at
+      // `~/.ahub/auth.json` would silently vanish.
+      //
+      // Named volumes (no host path) are docker-managed: auto-created on
+      // first run, survive `rm`, never grow inside the user's vault. To
+      // wipe all stored credentials the user can `docker volume rm
+      // feynman-state feynman-ahub` from the host.
+      "-v",
+      "feynman-state:/root/.feynman",
+      "-v",
+      "feynman-ahub:/root/.ahub",
     ];
     if (prefs.vaultMountSrc.length > 0) {
       const dst = prefs.vaultMountDst || "/vault";

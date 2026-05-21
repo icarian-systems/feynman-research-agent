@@ -30,7 +30,6 @@ const FEATURED_SLUGS: readonly string[] = [
   "audit",
   "recipe",
   "review",
-  "draft",
 ];
 
 const FEATURED_FALLBACK_TITLES: Record<string, string> = {
@@ -39,7 +38,6 @@ const FEATURED_FALLBACK_TITLES: Record<string, string> = {
   audit: "Audit",
   recipe: "Recipe",
   review: "Review this paper",
-  draft: "Draft",
 };
 
 export interface WorkflowsViewDeps {
@@ -62,6 +60,12 @@ export interface WorkflowsViewDeps {
   registry?: ActiveRunRegistry;
   /** Last-Event-ID persistence sink — passed through to runWorkflow. */
   onLastEventIdAdvance?: (runId: string, eventId: string) => void;
+  /** Auto-open-artifacts preference — passed through to runWorkflow. */
+  getAutoOpenArtifacts?: () => "off" | "last" | "all";
+  /** Vault-relative workspace folder — passed through to runWorkflow. */
+  getWorkspaceFolder?: () => string;
+  /** Auto-yes for agent prompts — passed through to runWorkflow. */
+  getAutoApproveAgentPrompts?: () => boolean;
 }
 
 type ArgValue = string | number | boolean;
@@ -460,6 +464,30 @@ export class FeynmanWorkflowsView extends ItemView {
     }
     runBtn.setAttr("disabled", "true");
     runBtn.setText(`Running /${entry.slug}…`);
+    const startedAt = Date.now();
+    let elapsedTimer: number | null = null;
+    const tick = (): void => {
+      const sec = Math.floor((Date.now() - startedAt) / 1000);
+      const label = sec >= 60 ? `${Math.floor(sec / 60)}m ${(sec % 60).toString().padStart(2, "0")}s` : `${sec}s`;
+      runBtn.setText(`Running /${entry.slug}… (${label})`);
+    };
+    elapsedTimer = window.setInterval(tick, 1000);
+    tick();
+    let finished = false;
+    const reset = (): void => {
+      if (finished) return;
+      finished = true;
+      if (elapsedTimer !== null) {
+        window.clearInterval(elapsedTimer);
+        elapsedTimer = null;
+      }
+      // The button may have been re-rendered (e.g. on plugin reload). Guard
+      // before mutating so we don't NPE on a detached element.
+      if (runBtn.isConnected) {
+        runBtn.removeAttribute("disabled");
+        runBtn.setText(`Run /${entry.slug}`);
+      }
+    };
     try {
       await runWorkflow(this.app, entry, args, {
         client: deps.client,
@@ -467,12 +495,17 @@ export class FeynmanWorkflowsView extends ItemView {
         getModel: deps.getModel,
         registry: deps.registry,
         onLastEventIdAdvance: deps.onLastEventIdAdvance,
+        getAutoOpenArtifacts: deps.getAutoOpenArtifacts,
+        getWorkspaceFolder: deps.getWorkspaceFolder,
+        getAutoApproveAgentPrompts: deps.getAutoApproveAgentPrompts,
+        onRunFinished: () => reset(),
       });
-      this.expanded = null;
-      this.render();
-    } finally {
-      runBtn.removeAttribute("disabled");
-      runBtn.setText(`Run /${entry.slug}`);
+      // Don't collapse the expanded card or re-render now — the run is still
+      // in flight in the chat view, and re-rendering would replace the live
+      // button (with its elapsed timer) with a fresh "Run" button before
+      // `onRunFinished` ever fires.
+    } catch {
+      reset();
     }
   }
 }

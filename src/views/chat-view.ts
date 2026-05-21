@@ -92,19 +92,29 @@ export function sanitizeAgentMarkdown(md: string): string {
 
 /**
  * Validate an agent-supplied artifact path against a vault-relative
- * workspace folder. Returns null on reject (caller must drop the event).
- * Rules (Agent 4):
+ * Returns the path verbatim (vault-relative, no transformation) on accept,
+ * or null on reject. The `workspaceFolder` arg is no longer used for
+ * coercion — see the note below.
+ *
+ * Why the workspace-folder rewrite was removed:
+ *   In v0 this helper forcibly prepended `workspaceFolder` (`Feynman/`) when
+ *   the agent's path didn't already start with it. But Pi's `write` tool
+ *   resolves relative paths against cwd (= `/vault` inside the container =
+ *   vault root). When the agent wrote `output/foo.md` the real file landed
+ *   at `<vault>/output/foo.md` while the plugin reported and auto-opened
+ *   `Feynman/output/foo.md` — Obsidian's `openLinkText` then *created* a
+ *   blank stub at that bogus path. Honour the agent's path; the vault
+ *   itself is the sandbox.
+ *
+ * Security guards (kept):
  *   - Empty path rejected.
  *   - Absolute path (`/...`) rejected.
- *   - Any `..` segment rejected.
+ *   - Any `..` segment rejected (no path traversal).
  *   - Scheme prefixes rejected (http:, https:, file:, javascript:, data:).
- *   - After joining with `workspaceFolder`, the resolved string must still
- *     prefix-match the workspace folder (string check; no realpath available
- *     in Obsidian's adapter API).
  */
 export function validateArtifactPath(
   rawPath: string,
-  workspaceFolder: string,
+  _workspaceFolder: string,
 ): string | null {
   if (typeof rawPath !== "string" || rawPath.length === 0) return null;
   // Disallow scheme-prefixed paths — these would render as external links.
@@ -114,15 +124,10 @@ export function validateArtifactPath(
   // Any `..` segment is a traversal attempt; reject without trying to
   // canonicalize.
   if (rawPath.includes("..")) return null;
-
-  const folder = workspaceFolder.endsWith("/")
-    ? workspaceFolder
-    : workspaceFolder + "/";
-  // The agent may have already prefixed the path with the workspace folder
-  // (server-side templating). Honor that — only re-prefix if missing.
-  const resolved = rawPath.startsWith(folder) ? rawPath : folder + rawPath;
-  if (!resolved.startsWith(folder)) return null;
-  return resolved;
+  // Strip a leading "./" for cosmetic consistency in the callout.
+  const cleaned = rawPath.startsWith("./") ? rawPath.slice(2) : rawPath;
+  if (cleaned.length === 0) return null;
+  return cleaned;
 }
 
 /**
@@ -203,6 +208,46 @@ export class FeynmanChatView extends ItemView {
    * settings are loaded.
    */
   private workspaceFolder = "Feynman/";
+  /**
+   * Whether (and how many) artifacts to auto-open in new panes when a run
+   * finishes. Sourced from settings via `setAutoOpenArtifacts` — falls back
+   * to "off" so a view not wired up by the workflow runner is a no-op.
+   */
+  private autoOpenArtifacts: "off" | "last" | "all" = "off";
+  /**
+   * When true, `tool.approval_required` and `agent.question` events get an
+   * immediate positive answer and a chat-log breadcrumb instead of opening
+   * a modal. The plugin has no persistent chat surface, so blocking on
+   * user input would leave runs hung in the background.
+   */
+  private autoApproveAgentPrompts = false;
+  /**
+   * Live status banner at the top of the chat view. Shows what the agent
+   * is doing right now (thinking, calling a tool, streaming a response,
+   * waiting for the user) plus elapsed time. Replaces the silent
+   * "empty pane until the first markdown chunk arrives" UX.
+   */
+  private statusEl: HTMLElement | null = null;
+  private statusDotEl: HTMLElement | null = null;
+  private statusLabelEl: HTMLElement | null = null;
+  private statusDetailEl: HTMLElement | null = null;
+  private statusTimerEl: HTMLElement | null = null;
+  private statusTimerHandle: number | null = null;
+  private statusRunStartedAt = 0;
+  /**
+   * Called once when the run terminates (run.done / run.error / aborted).
+   * Hook for callers like the workflows sidebar that want to keep their
+   * "Running…" button label live until the stream actually finishes.
+   */
+  private onRunFinished:
+    | ((status: "done" | "error" | "aborted") => void)
+    | null = null;
+  /**
+   * Artifact paths surfaced via `artifact.written` during the current run.
+   * Used by the "Run complete" callout to list every file the agent
+   * produced. Cleared on view close.
+   */
+  private readonly runArtifacts: string[] = [];
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -225,6 +270,13 @@ export class FeynmanChatView extends ItemView {
     this.inputPoster = poster;
   }
 
+  /** Register a one-shot callback fired when the current run terminates.
+   * Called by the workflow runner so the sidebar's "Running /<slug>…" button
+   * keeps its label until the SSE stream actually closes. */
+  setOnRunFinished(cb: (status: "done" | "error" | "aborted") => void): void {
+    this.onRunFinished = cb;
+  }
+
   /**
    * Set the vault-relative workspace folder used by the artifact-path
    * validator. Should be called by the workflow runner alongside
@@ -234,6 +286,16 @@ export class FeynmanChatView extends ItemView {
     if (typeof folder === "string" && folder.length > 0) {
       this.workspaceFolder = folder;
     }
+  }
+
+  /** Configure auto-open behavior for the next run.done. */
+  setAutoOpenArtifacts(mode: "off" | "last" | "all"): void {
+    this.autoOpenArtifacts = mode;
+  }
+
+  /** Toggle auto-yes for `tool.approval_required` and `agent.question`. */
+  setAutoApproveAgentPrompts(enabled: boolean): void {
+    this.autoApproveAgentPrompts = enabled;
   }
 
   /**
@@ -291,6 +353,28 @@ export class FeynmanChatView extends ItemView {
     const root = (container as HTMLElement);
     root.empty();
     root.addClass("feynman-chat-view");
+    this.statusEl = root.createDiv({ cls: "feynman-chat-status is-idle" });
+    const inner = this.statusEl.createDiv({ cls: "feynman-chat-status-inner" });
+    this.statusDotEl = inner.createSpan({ cls: "feynman-chat-status-dot" });
+    const labelWrap = inner.createDiv({ cls: "feynman-chat-status-label-wrap" });
+    this.statusLabelEl = labelWrap.createSpan({
+      cls: "feynman-chat-status-label",
+      text: "Idle",
+    });
+    this.statusDetailEl = labelWrap.createSpan({
+      cls: "feynman-chat-status-detail",
+    });
+    this.statusTimerEl = inner.createSpan({ cls: "feynman-chat-status-timer" });
+    // "Clear" button — wipes the log so prior runs don't bleed into the
+    // current one. Doesn't cancel an in-flight stream (use Cancel for that);
+    // just removes the visible history. Auto-clear on the next attachStream
+    // also runs, so a fresh /run starts with a clean view.
+    const clearBtn = inner.createEl("button", {
+      cls: "feynman-chat-clear-btn",
+      text: "Clear",
+      attr: { type: "button", title: "Clear run log" },
+    });
+    this.registerDomEvent(clearBtn, "click", () => this.clearLog());
     this.logEl = root.createDiv({ cls: "feynman-chat-log" });
     this.renderComponent.load();
   }
@@ -330,6 +414,13 @@ export class FeynmanChatView extends ItemView {
       }
     }
     this.messages.length = 0;
+    this.runArtifacts.length = 0;
+    this.stopStatusTimer();
+    if (this.onRunFinished !== null) {
+      const cb = this.onRunFinished;
+      this.onRunFinished = null;
+      cb("aborted");
+    }
     this.renderComponent.unload();
   }
 
@@ -343,6 +434,10 @@ export class FeynmanChatView extends ItemView {
     if (this.streamAbort !== null) {
       this.streamAbort.abort();
     }
+    // Auto-clear the visible log when a new run attaches so prior-run content
+    // doesn't bleed into the current view. The manual "Clear" button covers
+    // the case where the user wants to wipe mid-run.
+    this.clearLog({ resetStatus: false });
     this.streamAbort = new AbortController();
     const signal = this.streamAbort.signal;
     // Stash the closable producer if the caller handed us a full EventStream.
@@ -351,9 +446,13 @@ export class FeynmanChatView extends ItemView {
     ) {
       this.currentStream = stream as EventStream;
     }
+    this.setRunningStatus("Connecting…", "");
+    let finalStatus: "done" | "error" | "aborted" = "aborted";
     try {
       for await (const ev of stream) {
         if (signal.aborted) return;
+        if (ev.type === "run.done") finalStatus = "done";
+        else if (ev.type === "run.error") finalStatus = "error";
         this.ingest(ev);
       }
     } catch (err) {
@@ -363,12 +462,18 @@ export class FeynmanChatView extends ItemView {
         err instanceof Error ? err.message : String(err),
         "stream-error",
       );
+      finalStatus = "error";
+      this.setTerminalStatus("error", "Stream interrupted");
     } finally {
       // Producer is exhausted (or aborted) — unregister so plugin onunload
       // doesn't try to cancel a finished run.
       if (this.pluginRef !== null && this.currentRunId !== null) {
         this.pluginRef.unregisterActiveRun(this.currentRunId);
       }
+      this.stopStatusTimer();
+      const cb = this.onRunFinished;
+      this.onRunFinished = null;
+      cb?.(finalStatus);
     }
   }
 
@@ -376,25 +481,35 @@ export class FeynmanChatView extends ItemView {
   ingest(event: Event): void {
     switch (event.type) {
       case "agent.message":
+        this.setRunningStatus("Responding", "");
         this.handleAgentMessage(event);
         break;
       case "agent.thinking":
+        this.setRunningStatus("Thinking", "");
         this.handleThinking(event);
         break;
       case "agent.question":
+        this.setRunningStatus("Waiting for input", "Question pending");
         this.handleQuestion(event);
         break;
       case "tool.call":
+        this.setRunningStatus("Running tool", event.name);
         this.handleToolCall(event);
         break;
       case "tool.result":
+        this.setRunningStatus("Processing result", "");
         this.handleToolResult(event);
         break;
       case "tool.approval_required":
+        this.setRunningStatus("Waiting for approval", event.title);
         this.handleApprovalRequired(event);
         break;
       case "fs.read_request":
       case "fs.write_request":
+        this.setRunningStatus(
+          event.type === "fs.read_request" ? "Reading vault" : "Writing to vault",
+          event.path,
+        );
         // Handed off to FsBridgeHandler (§6.2, §6.3 + docs/FS-BRIDGE-SPEC.md).
         // The chat view shows a faint trace so the user knows real-time
         // vault access happened; the handler validates + executes + replies
@@ -407,14 +522,20 @@ export class FeynmanChatView extends ItemView {
         this.dispatchFsEvent(event);
         break;
       case "artifact.written":
+        this.setRunningStatus("Writing artifact", event.path);
         this.handleArtifactWritten(event);
         break;
       case "run.error":
+        this.setTerminalStatus("error", event.message);
         this.appendErrorCallout(event.message, event.code);
         // Finalize any open message so users don't see a half-rendered block.
         this.closeAllOpenMessages();
         break;
       case "run.done":
+        this.setTerminalStatus(
+          "done",
+          event.exitCode === 0 ? "Run complete" : `Exit ${event.exitCode}`,
+        );
         this.appendDoneCallout(event.exitCode, event.summary);
         this.closeAllOpenMessages();
         break;
@@ -535,6 +656,11 @@ export class FeynmanChatView extends ItemView {
         );
       }
     };
+    if (this.autoApproveAgentPrompts) {
+      this.appendAutoAcceptCallout(`Auto-approved: ${ev.title}`);
+      void decide("allow_once");
+      return;
+    }
     new ToolApprovalModal(
       this.app,
       { toolId: ev.toolId, title: ev.title, args: ev.args },
@@ -559,6 +685,9 @@ export class FeynmanChatView extends ItemView {
       );
       return;
     }
+    if (!this.runArtifacts.includes(validated)) {
+      this.runArtifacts.push(validated);
+    }
     const callout = this.logEl.createDiv({
       cls: "feynman-artifact callout",
       attr: { "data-callout": "info" },
@@ -581,6 +710,27 @@ export class FeynmanChatView extends ItemView {
 
   private handleQuestion(ev: AgentQuestionEvent): void {
     if (this.logEl === null) return;
+    if (this.autoApproveAgentPrompts) {
+      // No persistent chat UI → free-text questions like "proceed with this
+      // plan?" get an immediate "yes". The agent's prompt is shown in a
+      // breadcrumb so the user knows what was implicitly accepted.
+      this.appendAutoAcceptCallout(
+        `Auto-answered "yes": ${this.truncate(ev.markdown, 120)}`,
+      );
+      if (this.inputPoster !== null) {
+        const answer: Input = {
+          type: "answer",
+          questionId: ev.questionId,
+          markdown: "yes",
+        };
+        void this.inputPoster(answer).catch((err: unknown) => {
+          new Notice(
+            `Feynman: auto-answer failed — ${err instanceof Error ? err.message : String(err)}`,
+          );
+        });
+      }
+      return;
+    }
     const callout = this.logEl.createDiv({
       cls: "feynman-question callout",
       attr: { "data-callout": "question" },
@@ -776,6 +926,57 @@ export class FeynmanChatView extends ItemView {
     line.setText(text);
   }
 
+  /**
+   * Wipe the visible run log and associated per-run state. Called both from
+   * the user's "Clear" button and automatically on the next `attachStream`
+   * so a fresh run doesn't render alongside the previous one's history.
+   *
+   * Does NOT cancel any in-flight SSE stream — that lives in `streamAbort`
+   * and is controlled by Cancel / view close. Clearing while a stream is
+   * live just empties the visible log; new events stream in from a clean
+   * starting point.
+   */
+  private clearLog(opts: { resetStatus?: boolean } = {}): void {
+    const resetStatus = opts.resetStatus ?? true;
+    if (this.logEl !== null) this.logEl.empty();
+    // Tear down per-message idle handles so we don't try to render into
+    // elements that are no longer in the DOM.
+    for (const m of this.messages) {
+      if (m.idle !== null) {
+        m.idle.cancel();
+        m.idle = null;
+      }
+    }
+    this.messages.length = 0;
+    this.runArtifacts.length = 0;
+    this.decidedToolIds.clear();
+    if (resetStatus) {
+      this.stopStatusTimer();
+      if (this.statusEl !== null) {
+        this.statusEl.removeClass("is-running", "is-done", "is-error");
+        this.statusEl.addClass("is-idle");
+      }
+      this.statusLabelEl?.setText("Idle");
+      this.statusDetailEl?.setText("");
+      this.statusTimerEl?.setText("");
+    }
+  }
+
+  /** Inline breadcrumb shown when the plugin auto-accepts an agent prompt
+   * on the user's behalf. Faint styling — the run keeps going and the
+   * user can scroll back to see exactly what was approved. */
+  private appendAutoAcceptCallout(text: string): void {
+    if (this.logEl === null) return;
+    const line = this.logEl.createDiv({ cls: "feynman-auto-accept" });
+    const glyph = line.createSpan({ cls: "feynman-auto-accept-glyph", text: "✓" });
+    glyph.setAttr("aria-hidden", "true");
+    line.createSpan({ text });
+  }
+
+  private truncate(s: string, n: number): string {
+    return s.length <= n ? s : s.slice(0, n) + "…";
+  }
+
   private appendErrorCallout(message: string, code?: string): void {
     if (this.logEl === null) return;
     const el = this.logEl.createDiv({
@@ -801,14 +1002,56 @@ export class FeynmanChatView extends ItemView {
       cls: "callout-title",
       text: exitCode === 0 ? "Run complete" : `Run finished (exit ${exitCode})`,
     });
+    const body = el.createDiv({ cls: "callout-content" });
+
+    // Artifact summary — the most useful single piece of info post-run.
+    // Without this the user has to scroll back through the log to find
+    // every `artifact.written` callout to learn where the docs landed.
+    if (this.runArtifacts.length > 0) {
+      const wrap = body.createDiv({ cls: "feynman-done-artifacts" });
+      wrap.createDiv({
+        cls: "feynman-done-artifacts-title",
+        text: this.runArtifacts.length === 1
+          ? "Wrote 1 file:"
+          : `Wrote ${this.runArtifacts.length} files:`,
+      });
+      const list = wrap.createEl("ul", { cls: "feynman-done-artifacts-list" });
+      for (const path of this.runArtifacts) {
+        const li = list.createEl("li");
+        const link = li.createEl("a", {
+          text: path,
+          cls: "internal-link",
+          href: "#",
+        });
+        this.registerDomEvent(link, "click", (e: MouseEvent) => {
+          e.preventDefault();
+          void this.app.workspace.openLinkText(path, "", false);
+        });
+      }
+      // Also fire a Notice so users who navigated away from the chat view
+      // (or had it tucked into a sidebar) get a top-corner heads-up.
+      const lead = this.runArtifacts[0];
+      const tail = this.runArtifacts.length > 1
+        ? ` (+${this.runArtifacts.length - 1} more)`
+        : "";
+      new Notice(`Feynman: run complete — ${lead}${tail}`, 6000);
+      // Auto-open per settings. Only on successful runs so a partial /
+      // errored run doesn't pop a half-written file in the user's face.
+      if (exitCode === 0) {
+        this.autoOpenAfterRun();
+      }
+    } else if (exitCode === 0) {
+      new Notice("Feynman: run complete.", 4000);
+    }
+
     if (summary !== undefined) {
-      const body = el.createDiv({ cls: "callout-content" });
+      const summaryEl = body.createDiv({ cls: "feynman-done-summary" });
       // run.done summaries are agent-authored; sanitize + use the virtual
       // sourcePath like every other agent-markdown surface in this view.
       void MarkdownRenderer.render(
         this.app,
         sanitizeAgentMarkdown(summary),
-        body,
+        summaryEl,
         VIRTUAL_SOURCE_PATH,
         this.renderComponent,
       );
@@ -853,5 +1096,108 @@ export class FeynmanChatView extends ItemView {
       return String(args);
     }
   }
+
+  // -------------------------------------------------------------------
+  // Status banner
+  // -------------------------------------------------------------------
+
+  /**
+   * Open one or more artifacts in new panes per the user's preference. Called
+   * from `appendDoneCallout` only on successful runs. Opens in a NEW leaf
+   * (third arg `true`) so the chat view stays visible alongside.
+   *
+   * We only auto-open files whose extension Obsidian will render meaningfully
+   * (markdown / canvas / image). For everything else (bibtex, json, csv) the
+   * user can click the link in the callout if they actually want it open.
+   */
+  private autoOpenAfterRun(): void {
+    if (this.autoOpenArtifacts === "off") return;
+    if (this.runArtifacts.length === 0) return;
+    const targets =
+      this.autoOpenArtifacts === "all"
+        ? this.runArtifacts.slice()
+        : [this.runArtifacts[this.runArtifacts.length - 1]];
+    for (const path of targets) {
+      if (!path || !isAutoOpenableExt(path)) continue;
+      try {
+        // `openLinkText(linktext, sourcePath, newLeaf)` — third arg true opens
+        // in a new pane so the chat view stays put.
+        void this.app.workspace.openLinkText(path, "", true);
+      } catch {
+        // openLinkText throws if the file doesn't exist yet (race between the
+        // server's `artifact.written` event and the vault rescan). Silently
+        // skip — the clickable link in the callout still works.
+      }
+    }
+  }
+
+  private setRunningStatus(label: string, detail: string): void {
+    if (this.statusEl === null) return;
+    this.statusEl.removeClass("is-idle", "is-done", "is-error");
+    this.statusEl.addClass("is-running");
+    this.statusLabelEl?.setText(label);
+    this.statusDetailEl?.setText(detail);
+    this.startStatusTimerIfNeeded();
+  }
+
+  private setTerminalStatus(
+    kind: "done" | "error",
+    detail: string,
+  ): void {
+    if (this.statusEl === null) return;
+    this.statusEl.removeClass("is-idle", "is-running");
+    this.statusEl.addClass(kind === "done" ? "is-done" : "is-error");
+    this.statusLabelEl?.setText(kind === "done" ? "Complete" : "Error");
+    this.statusDetailEl?.setText(detail);
+    this.stopStatusTimer();
+  }
+
+  private startStatusTimerIfNeeded(): void {
+    if (this.statusTimerHandle !== null) return;
+    this.statusRunStartedAt = Date.now();
+    const tick = (): void => {
+      if (this.statusTimerEl === null) return;
+      const elapsed = Date.now() - this.statusRunStartedAt;
+      this.statusTimerEl.setText(formatElapsed(elapsed));
+    };
+    tick();
+    this.statusTimerHandle = window.setInterval(tick, 1000);
+  }
+
+  private stopStatusTimer(): void {
+    if (this.statusTimerHandle !== null) {
+      window.clearInterval(this.statusTimerHandle);
+      this.statusTimerHandle = null;
+    }
+  }
+}
+
+/** Extensions Obsidian renders natively in a workspace leaf. Other formats
+ * (bibtex, json, csv, etc.) are still clickable in the run-complete callout —
+ * we just don't auto-open them, since opening would land on a text-only fallback. */
+const AUTO_OPEN_EXTS = new Set([
+  "md",
+  "canvas",
+  "png",
+  "jpg",
+  "jpeg",
+  "gif",
+  "webp",
+  "svg",
+  "pdf",
+]);
+
+function isAutoOpenableExt(path: string): boolean {
+  const dotIdx = path.lastIndexOf(".");
+  if (dotIdx === -1) return false;
+  const ext = path.slice(dotIdx + 1).toLowerCase();
+  return AUTO_OPEN_EXTS.has(ext);
+}
+
+function formatElapsed(ms: number): string {
+  const totalSec = Math.floor(ms / 1000);
+  const m = Math.floor(totalSec / 60);
+  const s = totalSec % 60;
+  return m > 0 ? `${m}m ${s.toString().padStart(2, "0")}s` : `${s}s`;
 }
 

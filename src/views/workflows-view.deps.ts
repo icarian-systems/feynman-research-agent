@@ -38,5 +38,8 @@ export function getWorkflowsDeps(plugin: FeynmanPlugin): WorkflowsViewDeps {
     registry: plugin,
     onLastEventIdAdvance: (runId, eventId) =>
       plugin.recordLastEventId(runId, eventId),
+    getAutoOpenArtifacts: () => plugin.settings.autoOpenArtifacts,
+    getWorkspaceFolder: () => plugin.settings.workspaceFolder,
+    getAutoApproveAgentPrompts: () => plugin.settings.autoApproveAgentPrompts,
   };
 }

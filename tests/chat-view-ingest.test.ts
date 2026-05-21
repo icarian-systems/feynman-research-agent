@@ -132,21 +132,29 @@ test("validateArtifactPath rejects empty string", () => {
   assert.equal(validateArtifactPath("", WORKSPACE), null);
 });
 
-test("validateArtifactPath accepts a clean relative path", () => {
+test("validateArtifactPath returns the agent path verbatim (no workspace prepend)", () => {
+  // Previously this helper coerced bare paths under `workspaceFolder`,
+  // which masked the agent's real write location (vault root). The
+  // workspace folder is now ignored — see the helper's docstring.
   const resolved = validateArtifactPath("notes/foo.md", WORKSPACE);
-  assert.equal(resolved, "Feynman/notes/foo.md");
+  assert.equal(resolved, "notes/foo.md");
 });
 
-test("validateArtifactPath honors paths already prefixed by workspace", () => {
+test("validateArtifactPath leaves an already-prefixed path alone", () => {
   const resolved = validateArtifactPath("Feynman/outputs/x.md", WORKSPACE);
   assert.equal(resolved, "Feynman/outputs/x.md");
 });
 
-test("validateArtifactPath tolerates a workspace folder without trailing slash", () => {
-  // Defensive: callers may forget the trailing slash. The helper appends it
-  // before joining.
-  const resolved = validateArtifactPath("notes/foo.md", "Feynman");
-  assert.equal(resolved, "Feynman/notes/foo.md");
+test("validateArtifactPath accepts paths outside the workspace folder", () => {
+  // Pi's write tool resolves against /vault (the vault root). Agents
+  // routinely write to `output/`, `notes/`, etc. — none of which sit
+  // under `Feynman/`. They must round-trip unchanged.
+  assert.equal(validateArtifactPath("output/draft.md", WORKSPACE), "output/draft.md");
+  assert.equal(validateArtifactPath("notes/idea.md", WORKSPACE), "notes/idea.md");
+});
+
+test("validateArtifactPath strips a leading ./", () => {
+  assert.equal(validateArtifactPath("./output/x.md", WORKSPACE), "output/x.md");
 });
 
 test("validateArtifactPath rejects non-string inputs", () => {

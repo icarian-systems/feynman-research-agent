@@ -868,3 +868,269 @@
   flex: 1;
   min-width: 220px;
 }
+
+/* ----- OAuth sign-in section ----------------------------------------- */
+
+.feynman-oauth-section {
+  margin: 0.75em 0 1em;
+}
+.feynman-oauth-desc {
+  color: var(--text-muted);
+  font-size: 0.92em;
+  margin-bottom: 0.4em;
+}
+.feynman-oauth-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45em;
+  margin-top: 0.55em;
+}
+.feynman-oauth-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75em;
+  padding: 0.55em 0.75em;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  background: var(--background-secondary);
+}
+.feynman-oauth-row-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+}
+.feynman-oauth-row-name {
+  font-weight: 500;
+  color: var(--text-normal);
+}
+.feynman-oauth-row-state {
+  font-size: 0.82em;
+  color: var(--text-muted);
+}
+.feynman-oauth-row-state.feynman-oauth-signed-in {
+  color: var(--color-green, #2ea043);
+}
+.feynman-oauth-row-actions {
+  display: flex;
+  gap: 0.5em;
+  flex-shrink: 0;
+}
+.feynman-oauth-status-line {
+  margin-top: 0.55em;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.feynman-oauth-retry {
+  margin-left: 0.6em;
+}
+
+/* ----- OAuth login modal --------------------------------------------- */
+
+.feynman-oauth-modal {
+  max-width: 540px;
+}
+.feynman-oauth-auth-box {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  padding: 0.7em 0.85em;
+  margin: 0.8em 0;
+  background: var(--background-secondary);
+}
+.feynman-oauth-instructions {
+  color: var(--text-muted);
+  font-size: 0.9em;
+  margin-bottom: 0.5em;
+}
+.feynman-oauth-url-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.6em;
+  overflow-wrap: anywhere;
+}
+.feynman-oauth-url {
+  font-size: 0.82em;
+  word-break: break-all;
+  user-select: all;
+}
+.feynman-oauth-url-actions {
+  display: flex;
+  gap: 0.5em;
+  flex-wrap: wrap;
+}
+.feynman-oauth-progress-log {
+  margin: 0.6em 0;
+  font-size: 0.85em;
+  color: var(--text-muted);
+}
+.feynman-oauth-progress-log ul {
+  margin: 0.2em 0 0;
+  padding-left: 1.2em;
+}
+.feynman-oauth-prompt,
+.feynman-oauth-select {
+  margin: 0.8em 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+}
+.feynman-oauth-prompt-message {
+  color: var(--text-normal);
+  font-size: 0.92em;
+}
+.feynman-oauth-input {
+  width: 100%;
+  padding: 0.45em 0.6em;
+  border-radius: 4px;
+  border: 1px solid var(--background-modifier-border);
+  background: var(--background-primary);
+  color: var(--text-normal);
+}
+.feynman-oauth-select-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35em;
+}
+.feynman-oauth-select-option {
+  text-align: left;
+}
+.feynman-oauth-status {
+  margin: 0.6em 0;
+  color: var(--text-muted);
+  font-size: 0.92em;
+}
+.feynman-oauth-status.feynman-oauth-success {
+  color: var(--color-green, #2ea043);
+}
+.feynman-oauth-status.feynman-oauth-error {
+  color: var(--text-error, #b3261e);
+}
+.feynman-oauth-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5em;
+  margin-top: 0.8em;
+}
+
+/* ----- Chat-view live status banner ---------------------------------- */
+
+.feynman-chat-status {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  background: var(--background-secondary);
+  font-size: 13px;
+}
+.feynman-chat-status-inner {
+  display: flex;
+  align-items: center;
+  gap: 0.7em;
+}
+.feynman-chat-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  flex-shrink: 0;
+}
+.feynman-chat-status.is-running .feynman-chat-status-dot {
+  background: var(--interactive-accent, #5b8def);
+  animation: feynman-chat-status-pulse 1.2s ease-in-out infinite;
+}
+.feynman-chat-status.is-done .feynman-chat-status-dot {
+  background: var(--color-green, #2ea043);
+  animation: none;
+}
+.feynman-chat-status.is-error .feynman-chat-status-dot {
+  background: var(--text-error, #b3261e);
+  animation: none;
+}
+.feynman-chat-status-label-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5em;
+  flex: 1;
+  min-width: 0;
+}
+.feynman-chat-status-label {
+  font-weight: 500;
+  color: var(--text-normal);
+}
+.feynman-chat-status-detail {
+  color: var(--text-muted);
+  font-size: 0.92em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.feynman-chat-status-timer {
+  color: var(--text-faint);
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+@keyframes feynman-chat-status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+/* ----- Run-complete callout artifact list ---------------------------- */
+
+.feynman-done-artifacts {
+  margin: 0.4em 0 0.6em;
+}
+.feynman-done-artifacts-title {
+  font-weight: 500;
+  margin-bottom: 0.3em;
+}
+.feynman-done-artifacts-list {
+  margin: 0;
+  padding-left: 1.2em;
+}
+.feynman-done-artifacts-list li {
+  margin: 0.15em 0;
+}
+.feynman-done-summary {
+  margin-top: 0.55em;
+  padding-top: 0.55em;
+  border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+}
+
+/* ----- Auto-accept breadcrumb ---------------------------------------- */
+
+.feynman-auto-accept {
+  display: flex;
+  align-items: center;
+  gap: 0.4em;
+  font-size: 0.85em;
+  color: var(--text-muted);
+  padding: 0.3em 0;
+  border-left: 2px solid var(--color-green, #2ea043);
+  padding-left: 0.6em;
+  margin: 0.3em 0;
+}
+.feynman-auto-accept-glyph {
+  color: var(--color-green, #2ea043);
+}
+
+/* ----- Chat-view "Clear" button -------------------------------------- */
+
+.feynman-chat-clear-btn {
+  margin-left: 0.5em;
+  padding: 2px 8px;
+  font-size: 0.78em;
+  background: transparent;
+  border: 1px solid var(--background-modifier-border);
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.feynman-chat-clear-btn:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}

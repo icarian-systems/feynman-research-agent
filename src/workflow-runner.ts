@@ -42,6 +42,17 @@ export interface RunWorkflowDeps {
   getVaultMode: () => VaultMode;
   getModel: () => string | undefined;
   /**
+   * Optional accessor for the user's "auto-open created documents"
+   * preference. Threaded into the chat view so it can decide whether to
+   * open artifacts in new panes after `run.done`.
+   */
+  getAutoOpenArtifacts?: () => "off" | "last" | "all";
+  /** Optional vault-relative workspace folder; passed through to the chat
+   * view so artifact-path validation matches the user's configured root. */
+  getWorkspaceFolder?: () => string;
+  /** Whether to auto-yes `tool.approval_required` and `agent.question`. */
+  getAutoApproveAgentPrompts?: () => boolean;
+  /**
    * Optional hook invoked whenever a non-empty SSE framing `id:` is observed
    * on an event from the run. Wired by Agent 6 in Wave 3 to persist
    * `(runId, lastEventId)` to plugin data so a vault reload can resume the
@@ -55,6 +66,14 @@ export interface RunWorkflowDeps {
    * wires this from the plugin so `onunload` can cancel + close everything.
    */
   registry?: ActiveRunRegistry;
+  /**
+   * Fired when the run terminates (run.done / run.error / chat view closed).
+   * The workflows sidebar uses this to keep its "Running /<slug>…" label live
+   * until the stream is actually done — without this hook the button reverts
+   * the moment `runWorkflow` resolves (which is right after the chat view
+   * opens, NOT when the run finishes).
+   */
+  onRunFinished?: (status: "done" | "error" | "aborted") => void;
 }
 
 /**
@@ -99,6 +118,18 @@ export async function runWorkflow(
         view.setPluginRef(deps.registry);
       }
       view.setRunContext(res.runId, new Set());
+      if (deps.getWorkspaceFolder !== undefined) {
+        view.setWorkspaceFolder(deps.getWorkspaceFolder());
+      }
+      if (deps.getAutoOpenArtifacts !== undefined) {
+        view.setAutoOpenArtifacts(deps.getAutoOpenArtifacts());
+      }
+      if (deps.getAutoApproveAgentPrompts !== undefined) {
+        view.setAutoApproveAgentPrompts(deps.getAutoApproveAgentPrompts());
+      }
+      if (deps.onRunFinished !== undefined) {
+        view.setOnRunFinished(deps.onRunFinished);
+      }
       const onLastEventIdAdvance = deps.onLastEventIdAdvance;
       const stream = deps.client.openEvents(res.runId, {
         onFramingId:
@@ -110,11 +141,16 @@ export async function runWorkflow(
         deps.registry.registerActiveRun(res.runId, stream, () => stream.close());
       }
       void view.attachStream(stream);
+    } else if (deps.onRunFinished !== undefined) {
+      // Chat view couldn't open — fire the callback so the sidebar button
+      // doesn't get stuck in "Running" state.
+      deps.onRunFinished("error");
     }
   } catch (err) {
     new Notice(
       `Feynman: run failed — ${err instanceof Error ? err.message : String(err)}`,
     );
+    deps.onRunFinished?.("error");
   }
 }
 
@@ -144,6 +180,15 @@ export async function resumeWorkflow(
         view.setPluginRef(deps.registry);
       }
       view.setRunContext(state.runId, new Set());
+      if (deps.getWorkspaceFolder !== undefined) {
+        view.setWorkspaceFolder(deps.getWorkspaceFolder());
+      }
+      if (deps.getAutoOpenArtifacts !== undefined) {
+        view.setAutoOpenArtifacts(deps.getAutoOpenArtifacts());
+      }
+      if (deps.getAutoApproveAgentPrompts !== undefined) {
+        view.setAutoApproveAgentPrompts(deps.getAutoApproveAgentPrompts());
+      }
       const onLastEventIdAdvance = deps.onLastEventIdAdvance;
       const stream = deps.client.openEvents(state.runId, {
         lastEventId: state.lastEventId,

@@ -142,6 +142,9 @@ export default class FeynmanPlugin extends Plugin {
       getVaultMode: () => backendToVaultMode(this.settings.backend),
       getModel: () => (this.settings.model.length > 0 ? this.settings.model : undefined),
       onLastEventIdAdvance: (id: string, ev: string) => this.recordLastEventId(id, ev),
+      getAutoOpenArtifacts: () => this.settings.autoOpenArtifacts,
+      getWorkspaceFolder: () => this.settings.workspaceFolder,
+      getAutoApproveAgentPrompts: () => this.settings.autoApproveAgentPrompts,
     };
   }
 
