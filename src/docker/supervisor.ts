@@ -488,6 +488,19 @@ export class DockerSupervisor {
       await writeEnvFile(envFilePath, envVars);
     }
 
+    // 1b. Ensure the bind-mount source exists. Docker auto-creates a
+    // missing host path as a root-owned directory, which leaves the user
+    // unable to write into their own workspace folder. Pre-creating with
+    // the user's uid avoids that. Errors here are non-fatal — `docker run`
+    // will surface a clearer message if the path can't be made.
+    if (prefs.vaultMountSrc.length > 0) {
+      try {
+        await mkdir(prefs.vaultMountSrc, { recursive: true });
+      } catch {
+        // Surfaces as a docker-run failure below if the path is unusable.
+      }
+    }
+
     // 2. Force-remove any stale container with the same name. Tolerate
     // the no-such-container error (exit 1 with "No such container").
     await this.runDocker(["rm", "-f", containerName]);

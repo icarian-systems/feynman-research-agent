@@ -6,6 +6,7 @@
 
 import { App, FileSystemAdapter, Notice, PluginSettingTab, Setting, requestUrl } from "obsidian";
 import { platform } from "node:os";
+import { join as pathJoin } from "node:path";
 import type FeynmanPlugin from "../../main";
 import { WaitlistModal } from "../views/waitlist-modal";
 import { OAuthLoginModal } from "../views/oauth-login-modal";
@@ -223,7 +224,10 @@ export interface FeynmanSettings {
 export const DEFAULT_SETTINGS: FeynmanSettings = {
   backend: "docker",
   docker: {
-    imageTag: "icariansystems/feynman",
+    // Pinned to an immutable tag. Pulls from this exact image; a registry
+    // compromise of `:latest` cannot downgrade existing users. Bump on each
+    // release in lockstep with the server image build.
+    imageTag: "icariansystems/feynman:1.0.0",
     hostPort: 0,
     vaultMountPath: "",
     authToken: "",
@@ -338,12 +342,26 @@ export class FeynmanSettingTab extends PluginSettingTab {
       typeof d.vaultMountPath === "string" ? d.vaultMountPath : "";
     const authToken = typeof d.authToken === "string" ? d.authToken : "";
     const hostPort = typeof d.hostPort === "number" ? d.hostPort : 0;
+    // Default mount: <vault>/<workspaceFolder>, exposed at the same nested
+    // path inside the container so vault-relative paths still resolve
+    // (e.g. "Feynman/notes/x.md" → /vault/Feynman/notes/x.md). This scopes
+    // the container's direct filesystem view to the workspace; everything
+    // outside (other notes, .obsidian/, other plugins' data) is invisible
+    // through the bind mount. The FS bridge still serves cross-vault reads
+    // through its own validation + approval gates.
+    const ws = (this.plugin.settings.workspaceFolder || "Feynman/").replace(/\/+$/, "");
+    const customMount = vaultMountPath.length > 0;
+    const scopedSrc =
+      vaultRoot.length > 0 && ws.length > 0 ? pathJoin(vaultRoot, ws) : vaultRoot;
     return {
-      imageTag: imageTag.length > 0 ? imageTag : "icariansystems/feynman",
+      imageTag: imageTag.length > 0 ? imageTag : "icariansystems/feynman:1.0.0",
       hostPort,
       containerName: DEFAULT_CONTAINER_NAME,
-      vaultMountSrc: vaultMountPath.length > 0 ? vaultMountPath : vaultRoot,
-      vaultMountDst: "/vault",
+      vaultMountSrc: customMount ? vaultMountPath : scopedSrc,
+      // Custom mounts land at /vault (whole-vault override); the scoped
+      // default lands at /vault/<workspaceFolder> so the server still sees
+      // vault-relative paths.
+      vaultMountDst: customMount ? "/vault" : (ws.length > 0 ? `/vault/${ws}` : "/vault"),
       authToken,
     };
   }
@@ -587,7 +605,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     dockerCard
       .createDiv({ cls: "feynman-warning" })
       .setText(
-        "Your Anthropic key is stored locally in plaintext at .obsidian/plugins/feynman/data.json. If you use Obsidian Sync with 'Sync plugin config' enabled, this file syncs to other devices.",
+        "Your Anthropic key is stored locally in plaintext at ~/.feynman/secrets.json (mode 0600, outside the vault — not synced by Obsidian Sync).",
       );
 
     // State indicator above the Set-up button. Reflects supervisor.status();
@@ -756,13 +774,13 @@ export class FeynmanSettingTab extends PluginSettingTab {
     new Setting(host)
       .setName("Image")
       .setDesc(
-        "Docker image to run. Defaults to the official 'icariansystems/feynman' on Docker Hub. " +
+        "Docker image to run. Defaults to the official pinned 'icariansystems/feynman:1.0.0' on Docker Hub. " +
           "Override with a local tag (e.g. 'feynman-server') to use an image you've built yourself — " +
           "the plugin checks for a local image first before trying to pull.",
       )
       .addText((t) =>
         t
-          .setPlaceholder("icariansystems/feynman")
+          .setPlaceholder("icariansystems/feynman:1.0.0")
           .setValue(this.plugin.settings.docker.imageTag)
           .onChange((v) => {
             this.plugin.settings.docker.imageTag = v;
@@ -796,13 +814,18 @@ export class FeynmanSettingTab extends PluginSettingTab {
     });
 
     const vaultRoot = getVaultBasePath(this.app);
+    const wsForPlaceholder = (this.plugin.settings.workspaceFolder || "Feynman/").replace(/\/+$/, "");
+    const defaultMountForPlaceholder =
+      vaultRoot.length > 0 && wsForPlaceholder.length > 0
+        ? `${vaultRoot}/${wsForPlaceholder}`
+        : vaultRoot;
     new Setting(host)
       .setName("Vault mount path")
       .setDesc(
-        "Absolute host path bind-mounted into the container. Leave empty to mount this vault.",
+        "Absolute host path bind-mounted into the container. Leave empty to mount only the workspace folder (recommended) — the container's filesystem view is then scoped to that subfolder; the agent cannot see .obsidian/, other notes, or other plugins' data via direct fs access. Override with a wider path (e.g. the full vault root) only if you need the agent to bind-mount more than the workspace.",
       )
       .addText((t) => {
-        t.setPlaceholder(vaultRoot.length > 0 ? vaultRoot : "/absolute/path");
+        t.setPlaceholder(defaultMountForPlaceholder.length > 0 ? defaultMountForPlaceholder : "/absolute/path");
         t.setValue(this.plugin.settings.docker.vaultMountPath);
         t.onChange((v) => {
           this.plugin.settings.docker.vaultMountPath = v;
@@ -836,8 +859,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     anthropicSetting.descEl
       .createDiv({ cls: "feynman-warning" })
       .setText(
-        "Stored locally in plaintext at <vault>/.obsidian/plugins/feynman/data.json. " +
-          'If you use Obsidian Sync with "Sync plugin config" enabled, this will sync to other devices.',
+        "Stored in plaintext at ~/.feynman/secrets.json (mode 0600). This file lives outside the vault so it is not synced by Obsidian Sync and is not visible to the agent process inside the Docker container.",
       );
 
     new Setting(host)
@@ -893,7 +915,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
       const imageTag =
         this.plugin.settings.docker.imageTag.length > 0
           ? this.plugin.settings.docker.imageTag
-          : "icariansystems/feynman";
+          : "icariansystems/feynman:1.0.0";
       const hostPort =
         this.plugin.settings.docker.hostPort > 0
           ? this.plugin.settings.docker.hostPort
@@ -1368,7 +1390,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     const note = host.createDiv({ cls: "feynman-warning" });
     note.setText(
       "Optional. Passed into the container alongside ANTHROPIC_API_KEY. " +
-        "Stored locally in plaintext in data.json — see the disclosure on the Anthropic key.",
+        "Stored in plaintext at ~/.feynman/secrets.json (mode 0600), outside the vault.",
     );
 
     const fields: {
@@ -1404,7 +1426,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
         });
       setting.descEl
         .createDiv({ cls: "feynman-warning" })
-        .setText("Stored in plaintext in data.json — see the Anthropic key for full disclosure.");
+        .setText("Stored in plaintext at ~/.feynman/secrets.json (mode 0600), outside the vault.");
     }
   }
 
@@ -1467,7 +1489,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     const imageTag =
       this.plugin.settings.docker.imageTag.length > 0
         ? this.plugin.settings.docker.imageTag
-        : "icariansystems/feynman";
+        : "icariansystems/feynman:1.0.0";
     new Notice(`Feynman: pulling ${imageTag}…`);
     try {
       await this.supervisor.pullLatest(imageTag, (line) => {

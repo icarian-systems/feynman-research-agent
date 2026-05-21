@@ -336,6 +336,18 @@ export class FsBridgeHandler {
 // Path validation (pure)
 // -----------------------------------------------------------------------
 
+// C0/C1 control chars and Unicode bidi formatting characters. A path
+// containing any of these can be displayed in the approval modal in a
+// way that doesn't match what's actually written (RTL override, zero-width
+// space, etc.). Rejecting at the validator means the user never sees a
+// deceptive path in the prompt.
+// Built via RegExp() so the source stays free of literal control characters
+// (the alternative — a regex literal — embeds the bytes verbatim, which
+// breaks copy/paste review and editor tooling).
+const DISALLOWED_CHARS = new RegExp(
+  "[\\u0000-\\u001F\\u007F-\\u009F\\u200B-\\u200F\\u202A-\\u202E\\u2066-\\u2069\\uFEFF]"
+);
+
 /**
  * Validate a vault-relative path. Returns `null` on success, or a short
  * machine-readable reason string on rejection (suitable for logging).
@@ -348,6 +360,15 @@ export function validatePath(path: string): string | null {
   if (path.startsWith("/")) return "absolute";
   for (const scheme of REJECTED_SCHEMES) {
     if (path.startsWith(scheme)) return `scheme:${scheme}`;
+  }
+  if (DISALLOWED_CHARS.test(path)) return "control-or-bidi";
+  // Reject any path component starting with `.` (e.g. `.obsidian/...`,
+  // `.git/...`, `.env`). The plugin's own settings, OAuth state for other
+  // plugins, and OS-level config files all live under dot-prefixed
+  // directories; the agent never has a legitimate reason to touch them.
+  const segments = path.split("/");
+  for (const seg of segments) {
+    if (seg.length > 0 && seg.startsWith(".")) return `dot-segment:${seg}`;
   }
   if (!isUtf8Roundtrip(path)) return "non-utf8";
   return null;

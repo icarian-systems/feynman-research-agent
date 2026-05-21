@@ -84,6 +84,38 @@ test("validatePath: rejects strings containing unpaired surrogates", () => {
   assert.equal(validatePath(bad), "non-utf8");
 });
 
+test("validatePath: rejects dot-prefixed segments (.obsidian, .git, .env)", () => {
+  // Top-level dotfolder — the prime exfil target (.obsidian holds plugin
+  // settings + tokens for other plugins).
+  assert.equal(
+    validatePath(".obsidian/plugins/feynman/data.json"),
+    "dot-segment:.obsidian",
+  );
+  assert.equal(validatePath(".env"), "dot-segment:.env");
+  assert.equal(validatePath(".git/config"), "dot-segment:.git");
+  // Dot-folder in the middle of a path.
+  assert.equal(
+    validatePath("notes/.archive/x.md"),
+    "dot-segment:.archive",
+  );
+  // Leading `./` is also rejected (`..` traversal already caught separately).
+  assert.equal(validatePath("./notes/foo.md"), "dot-segment:.");
+});
+
+test("validatePath: rejects bidi/control characters", () => {
+  // U+202E (RTL override) — visually flips trailing text. A path with this
+  // character displays in the approval modal as something the user did not
+  // actually consent to write.
+  assert.equal(validatePath("notes/foo‮.md"), "control-or-bidi");
+  // Zero-width space.
+  assert.equal(validatePath("notes/foo​.md"), "control-or-bidi");
+  // C0 control (TAB is in this range, but not LF/CR which JSON would reject
+  // upstream).
+  assert.equal(validatePath("notes/foo.md"), "control-or-bidi");
+  // BOM.
+  assert.equal(validatePath("notes/﻿foo.md"), "control-or-bidi");
+});
+
 // -------------------- FsBridgeHandler (stubbed App) --------------------
 
 // Minimal `App` shape the handler touches. Marked `any` at the cast site so

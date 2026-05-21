@@ -9,6 +9,14 @@ import { registerCommands } from "./src/commands/register";
 import { DockerSupervisor } from "./src/docker/supervisor";
 import { FeynmanSettingTab, DEFAULT_SETTINGS, type FeynmanSettings } from "./src/settings/settings-tab";
 import { resolveBaseUrl, resolveAuth, backendToVaultMode, openPluginSettings } from "./src/settings/derive";
+import {
+  applySecrets,
+  containsAnySecret,
+  extractSecrets,
+  loadSecrets,
+  saveSecrets,
+  withoutSecrets,
+} from "./src/settings/secrets-store";
 import { FeynmanChatView, VIEW_TYPE_FEYNMAN_CHAT } from "./src/views/chat-view";
 import { FeynmanWorkflowsView, VIEW_TYPE_FEYNMAN_WORKFLOWS } from "./src/views/workflows-view";
 import { getWorkflowsDeps } from "./src/views/workflows-view.deps";
@@ -43,7 +51,24 @@ export default class FeynmanPlugin extends Plugin {
     // files don't lose nested defaults (e.g. docker.vaultMountPath added in
     // a later release) when the persisted blob is missing those keys.
     const persisted = (await this.loadData()) as Partial<FeynmanSettings> | null;
-    this.settings = mergeSettings(DEFAULT_SETTINGS, persisted ?? {});
+    const merged = mergeSettings(DEFAULT_SETTINGS, persisted ?? {});
+
+    // Secrets live outside the vault at ~/.feynman/secrets.json. Load them
+    // first, then run a one-shot migration if a pre-1.0 data.json still has
+    // credentials inline — copy them into the secrets file and rewrite
+    // data.json without them so the vault no longer carries the values.
+    const fileSecrets = await loadSecrets();
+    applySecrets(merged, fileSecrets);
+    const inlineMigrationNeeded =
+      persisted !== null && containsAnySecret(persisted);
+    if (inlineMigrationNeeded) {
+      applySecrets(merged, extractSecrets(persisted));
+      this.settings = merged;
+      await saveSecrets(extractSecrets(merged));
+      await this.saveData(withoutSecrets(merged));
+    } else {
+      this.settings = merged;
+    }
 
     this.registerView(VIEW_TYPE_FEYNMAN_CHAT, (leaf: WorkspaceLeaf) => new FeynmanChatView(leaf));
     this.registerView(VIEW_TYPE_FEYNMAN_WORKFLOWS, (leaf: WorkspaceLeaf) =>
@@ -148,9 +173,17 @@ export default class FeynmanPlugin extends Plugin {
     };
   }
 
-  /** Persist current settings to the plugin's data file. */
+  /**
+   * Persist current settings. Splits the in-memory shape into a non-secret
+   * half (written to Obsidian's data.json) and a secret half (written to
+   * ~/.feynman/secrets.json, mode 0600). The in-memory `this.settings`
+   * object retains both — only the on-disk copies are split.
+   */
   async saveSettings(): Promise<void> {
-    await this.saveData(this.settings);
+    await Promise.all([
+      this.saveData(withoutSecrets(this.settings)),
+      saveSecrets(extractSecrets(this.settings)),
+    ]);
   }
 
   /** Build the deps object both `registerCommands` paths use. */

@@ -1,5 +1,26 @@
 node_modules
 main.js
+main.js.map
 *.log
 .DS_Store
 .pm
+
+# Plugin secrets and runtime state. docs/SETUP.md walks contributors through
+# symlinking this repo into an Obsidian vault as the live plugin folder; once
+# linked, Obsidian writes data.json next to the source. Without this rule a
+# `git add .` ships real API keys (pre-1.0 builds; 1.0+ moves secrets to
+# ~/.feynman/secrets.json, but data.json may still hold non-secret state
+# the user doesn't want to commit).
+data.json
+.env
+.env.*
+.obsidian/
+.feynman/
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# Misc temp / backup
+*.bak
+*.tmp
