@@ -13,6 +13,9 @@ on:
 
 permissions:
   contents: write
+  # Required for actions/attest-build-provenance to mint a Sigstore signature.
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -47,6 +50,18 @@ jobs:
             echo "::error::Tag ($tag) does not match manifest.json version ($manifest_version)" >&2
             exit 1
           fi
+
+      - name: Attest build provenance
+        # Produces a Sigstore-signed attestation tying each release asset to
+        # this workflow run + source commit. Lets users (and the Obsidian
+        # reviewer) verify the binary was built from the tagged source via
+        # `gh attestation verify <file> --repo icarian-systems/feynman-research-agent`.
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
 
       - name: Create GitHub Release
         env:
