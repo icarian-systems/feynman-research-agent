@@ -10,6 +10,18 @@ A research agent for your vault. Runs locally in Docker against your own Anthrop
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running (macOS, Linux, or Windows)
 - An [Anthropic API key](https://console.anthropic.com/) (`sk-ant-...`)
 
+## Usage
+
+Once the plugin is installed, configured, and the local Docker server is running:
+
+1. **Open the chat panel.** Click the Feynman ribbon icon, or run **Feynman: Open chat** from the command palette. The panel shows the server's docker status and listens for slash commands.
+2. **Pick a workflow.** Type `/` in the input to browse the built-in workflows — `/deepresearch`, `/lit` (literature review), `/audit`, `/recipe`, `/review`, and several others. Each one opens a small form with the arguments it expects (e.g. a `topic` field).
+3. **Run it.** Submit the form and the agent streams its progress into the panel: tool calls, intermediate reasoning, and citations as they come in. You can cancel at any point.
+4. **Approve tool calls.** When the agent wants to write a file, fetch a paper, or invoke another tool, a modal pops up with the exact command and target path. **Deny** is focused by default — nothing runs without your explicit click.
+5. **Find your artifacts.** Finished outputs land in `<vault>/Feynman/outputs/`, `<vault>/Feynman/notes/`, and `<vault>/Feynman/papers/` as regular markdown files. Click the artifact link in the chat panel to jump straight to the file in Obsidian.
+
+You can also invoke a workflow directly from the command palette (e.g. **Feynman: Deep research…**) without opening the chat panel first — useful when a vault note is the topic and you want to pass `activeFile` or the current selection as context.
+
 ## Install
 
 ### Option A — build from source
