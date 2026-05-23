@@ -473,6 +473,8 @@ export class FeynmanSettingTab extends PluginSettingTab {
         // inspect` env-array tail).
         const envVars: Record<string, string> = {
           FEYNMAN_AUTH_TOKEN: prefs.authToken,
+          // Override the image's loopback default so the -p host→container forward can reach it; the host port is still published 127.0.0.1-only and the token above gates access.
+          FEYNMAN_BIND: "0.0.0.0",
         };
         const anthropicKey = this.plugin.settings.docker.apiKeys.anthropic;
         if (anthropicKey !== undefined && anthropicKey.length > 0) {
