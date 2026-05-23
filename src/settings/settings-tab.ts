@@ -650,7 +650,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     });
     cloudCard.createDiv({
       cls: "feynman-onboarding-card-body",
-      text: "Managed compute, managed keys, no Docker. Monthly subscription. Join the waitlist to be notified when the hosted tier ships.",
+      text: "Managed compute, managed keys, no Docker. Join the waitlist to be notified when the hosted tier ships.",
     });
     // Only surface the waitlist button when the feature flag is on.
     if (this.plugin.settings.features.waitlist.enabled) {
@@ -1561,7 +1561,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     card
       .createDiv({ cls: "feynman-cloud-card-body" })
       .setText(
-        "Managed compute, managed keys, no Docker. Monthly subscription. " +
+        "Managed compute, managed keys, no Docker. " +
           "The hosted tier ships in a future release.",
       );
 
