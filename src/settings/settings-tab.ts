@@ -227,7 +227,7 @@ export const DEFAULT_SETTINGS: FeynmanSettings = {
     // Pinned to an immutable tag. Pulls from this exact image; a registry
     // compromise of `:latest` cannot downgrade existing users. Bump on each
     // release in lockstep with the server image build.
-    imageTag: "icariansystems/feynman:1.0.0",
+    imageTag: "icariansystems/feynman-server:v1.0.0",
     hostPort: 0,
     vaultMountPath: "",
     authToken: "",
@@ -354,7 +354,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     const scopedSrc =
       vaultRoot.length > 0 && ws.length > 0 ? pathJoin(vaultRoot, ws) : vaultRoot;
     return {
-      imageTag: imageTag.length > 0 ? imageTag : "icariansystems/feynman:1.0.0",
+      imageTag: imageTag.length > 0 ? imageTag : "icariansystems/feynman-server:v1.0.0",
       hostPort,
       containerName: DEFAULT_CONTAINER_NAME,
       vaultMountSrc: customMount ? vaultMountPath : scopedSrc,
@@ -774,13 +774,13 @@ export class FeynmanSettingTab extends PluginSettingTab {
     new Setting(host)
       .setName("Image")
       .setDesc(
-        "Docker image to run. Defaults to the official pinned 'icariansystems/feynman:1.0.0' on Docker Hub. " +
+        "Docker image to run. Defaults to the official pinned 'icariansystems/feynman-server:v1.0.0' on Docker Hub. " +
           "Override with a local tag (e.g. 'feynman-server') to use an image you've built yourself — " +
           "the plugin checks for a local image first before trying to pull.",
       )
       .addText((t) =>
         t
-          .setPlaceholder("icariansystems/feynman:1.0.0")
+          .setPlaceholder("icariansystems/feynman-server:v1.0.0")
           .setValue(this.plugin.settings.docker.imageTag)
           .onChange((v) => {
             this.plugin.settings.docker.imageTag = v;
@@ -915,7 +915,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
       const imageTag =
         this.plugin.settings.docker.imageTag.length > 0
           ? this.plugin.settings.docker.imageTag
-          : "icariansystems/feynman:1.0.0";
+          : "icariansystems/feynman-server:v1.0.0";
       const hostPort =
         this.plugin.settings.docker.hostPort > 0
           ? this.plugin.settings.docker.hostPort
@@ -1489,7 +1489,7 @@ export class FeynmanSettingTab extends PluginSettingTab {
     const imageTag =
       this.plugin.settings.docker.imageTag.length > 0
         ? this.plugin.settings.docker.imageTag
-        : "icariansystems/feynman:1.0.0";
+        : "icariansystems/feynman-server:v1.0.0";
     new Notice(`Feynman: pulling ${imageTag}…`);
     try {
       await this.supervisor.pullLatest(imageTag, (line) => {

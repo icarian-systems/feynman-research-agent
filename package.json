@@ -2,7 +2,7 @@
   "name": "feynman-obsidian",
   "private": true,
   "type": "module",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Feynman Obsidian plugin (v1). HTTP+SSE client talking to a local Docker server with a bring-your-own Anthropic key.",
   "scripts": {
     "dev": "node esbuild.config.mjs --watch",
